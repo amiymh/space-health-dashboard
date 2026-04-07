@@ -200,9 +200,11 @@ with st.sidebar:
         options=method_options,
         index=0,
         help=(
-            "NLP / MeSH is deterministic biomedical NER + MeSH tree mapping "
-            "(the primary method). AI Extended is the legacy Claude-based "
-            "classification — kept for comparison."
+            "NLP/MeSH is the primary method — fully deterministic, uses "
+            "biomedical named-entity recognition to find disease terms and "
+            "maps them to SNIH areas via MeSH codes. AI Extended uses "
+            "Claude (an AI model) which infers disease relevance from "
+            "context. AI catches more experiments but is less precise."
         ),
     )
     use_nlp = method.startswith("NLP")
@@ -217,22 +219,52 @@ with st.sidebar:
         "Disease area",
         options=DISEASE_AREA_NAMES,
         default=[],
-        help="Empty = show all. Filters experiments and trials wherever a "
-             "disease tag is available.",
+        help=(
+            "Select one or more SNIH disease areas to filter all tabs. "
+            "Leave empty to see all areas."
+        ),
     )
     show_only_health = st.checkbox(
         "Health-related experiments only",
         value=True,
-        help="Hide experiments classified as plant biology, materials, "
-             "physical science, technology, or education.",
+        help=(
+            "When enabled, hides experiments classified as not "
+            "health-related (plant biology, materials science, fluid "
+            "physics, etc.). Turn off to see the full dataset."
+        ),
     )
     st.divider()
     st.caption("Pipeline status")
     active_count = len(classified_nlp_df if use_nlp else classified_ai_df)
-    st.write(f"Classified experiments: **{active_count}**")
-    st.write(f"Clinical trials: **{len(trials_df)}**")
-    st.write(f"PubMed counts: **{len(pubs_df)}**")
-    st.write(f"Therapies: **{len(therapies_df)}**")
+    st.markdown(
+        f"Classified experiments: **{active_count}**",
+        help=(
+            "Total number of ISS experiments that have been processed "
+            "through the classification pipeline."
+        ),
+    )
+    st.markdown(
+        f"Clinical trials: **{len(trials_df)}**",
+        help=(
+            "Space-related clinical trials fetched from ClinicalTrials.gov "
+            "using space + disease keyword combinations."
+        ),
+    )
+    st.markdown(
+        f"PubMed counts: **{len(pubs_df)}**",
+        help=(
+            "Number of disease areas with PubMed publication counts. "
+            "These show how much published research exists for each "
+            "SNIH area."
+        ),
+    )
+    st.markdown(
+        f"Therapies: **{len(therapies_df)}**",
+        help=(
+            "Approved drugs and medical devices that originated from or "
+            "were significantly advanced by space research."
+        ),
+    )
 
 
 # Bind the active classification dataset AFTER the sidebar has chosen.
@@ -263,6 +295,7 @@ TAB_LABELS = [
     "Gap Analysis",
     "Disease Deep-Dive",
     "Sources & Methods",
+    "📖 User Manual",
 ]
 tabs = st.tabs(TAB_LABELS)
 
@@ -278,11 +311,45 @@ with tabs[0]:
         total_trials = len(trials_df)
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total experiments", f"{total_exp:,}")
-        m2.metric("Health-related", f"{health_yes:,}",
-                  delta=f"{health_yes/total_exp:.0%}" if total_exp else None)
-        m3.metric("Clinical trials", f"{total_trials:,}")
-        m4.metric("PubMed (space biology)", f"{baseline_pubs:,}")
+        m1.metric(
+            "Total experiments",
+            f"{total_exp:,}",
+            help=(
+                "All ISS experiments from NASA's Open Science Data "
+                "Repository (OSDR). Each experiment is a unique research "
+                "study conducted on the International Space Station."
+            ),
+        )
+        m2.metric(
+            "Health-related",
+            f"{health_yes:,}",
+            delta=f"{health_yes/total_exp:.0%}" if total_exp else None,
+            help=(
+                "Experiments where the classification method detected a "
+                "disease-related term. The percentage shows health-related "
+                "out of total. With NLP/MeSH this is ~11%; with AI Extended "
+                "~52%. The difference is because NLP only counts literal "
+                "disease mentions while AI infers from context."
+            ),
+        )
+        m3.metric(
+            "Clinical trials",
+            f"{total_trials:,}",
+            help=(
+                "Total space-related clinical trials from ClinicalTrials.gov. "
+                "These are medical studies on Earth that investigate "
+                "conditions also studied in space research."
+            ),
+        )
+        m4.metric(
+            "PubMed (space biology)",
+            f"{baseline_pubs:,}",
+            help=(
+                "Baseline count of PubMed articles matching 'space biology' "
+                "— gives context for the scale of the field's published "
+                "research."
+            ),
+        )
 
         # Tiered breakdown caption (spec 05 section 4.2)
         if tiered_summary:
@@ -302,6 +369,11 @@ with tabs[0]:
         # Horizontal bar — experiments per disease area, descending
         with col_left:
             st.markdown("**Experiments per disease area**")
+            st.caption(
+                "Number of ISS experiments classified under each SNIH "
+                "priority disease area. An experiment can appear in multiple "
+                "areas if it covers more than one condition."
+            )
             # Prefer the tiered totals (T1+T2) when available — that's the
             # spec 05 default. Tier 3 (uncertain) shown as faint annotation.
             if tiered_summary and "per_disease_area" in tiered_summary:
@@ -387,6 +459,11 @@ with tabs[0]:
         # Donut — health vs not health
         with col_right:
             st.markdown("**Health-related share**")
+            st.caption(
+                "Proportion of all 3,829 experiments that were classified "
+                "as health-related vs. not. This ratio changes depending "
+                "on which classification method is selected in the sidebar."
+            )
             health_no = total_exp - health_yes
             fig_donut = go.Figure(
                 go.Pie(
@@ -416,6 +493,12 @@ with tabs[0]:
                 .reset_index(name="count")
             )
             st.markdown(f"**Top non-health categories** ({len(non_health):,} experiments)")
+            st.caption(
+                "Most common categories among experiments that were NOT "
+                "classified as health-related. These are legitimate space "
+                "research areas (plant biology, materials science) that "
+                "don't map to SNIH disease areas."
+            )
             fig_cat = px.bar(
                 cat_counts,
                 x="count",
@@ -446,6 +529,11 @@ with tabs[1]:
         search = st.text_input(
             "Search title or disease area",
             placeholder="bone, eye, OS-118, Alwood…",
+            help=(
+                "Free-text search across experiment titles, disease area "
+                "tags, and OS IDs. Case-insensitive. Combine with the "
+                "sidebar filters to narrow further."
+            ),
         )
 
         view = filtered_experiments.copy()
@@ -478,13 +566,67 @@ with tabs[1]:
             height=560,
             hide_index=True,
             column_config={
-                "osID": st.column_config.TextColumn("OS ID", width="small"),
-                "title": st.column_config.TextColumn("Title", width="large"),
-                "disease_areas": st.column_config.TextColumn("Disease areas", width="medium"),
-                "primary_disease_area": st.column_config.TextColumn("Primary", width="medium"),
-                "relevance_type": st.column_config.TextColumn("Relevance", width="small"),
-                "health_related": st.column_config.CheckboxColumn("Health?", width="small"),
-                "classification_source": st.column_config.TextColumn("Source", width="small"),
+                "osID": st.column_config.TextColumn(
+                    "OS ID",
+                    width="small",
+                    help=(
+                        "NASA's unique identifier for each experiment in "
+                        "the Open Science Data Repository. Format: OS-XXX."
+                    ),
+                ),
+                "title": st.column_config.TextColumn(
+                    "Title",
+                    width="large",
+                    help=(
+                        "The official title of the ISS experiment as "
+                        "registered in OSDR."
+                    ),
+                ),
+                "disease_areas": st.column_config.TextColumn(
+                    "Disease areas",
+                    width="medium",
+                    help=(
+                        "The SNIH disease area(s) this experiment maps to. "
+                        "Semicolon-separated if multiple. Based on MeSH "
+                        "disease codes found in the experiment text."
+                    ),
+                ),
+                "primary_disease_area": st.column_config.TextColumn(
+                    "Primary",
+                    width="medium",
+                    help=(
+                        "The single disease area with the strongest "
+                        "evidence (most MeSH term matches). Used when only "
+                        "one area can be shown."
+                    ),
+                ),
+                "relevance_type": st.column_config.TextColumn(
+                    "Relevance",
+                    width="small",
+                    help=(
+                        "How the classification was made. 'deterministic' "
+                        "= NLP found MeSH evidence; 'insufficient_text' "
+                        "= the experiment had too little text to classify."
+                    ),
+                ),
+                "health_related": st.column_config.CheckboxColumn(
+                    "Health?",
+                    width="small",
+                    help=(
+                        "Whether the classification method found this "
+                        "experiment relevant to any SNIH disease area. "
+                        "True = at least one disease area assigned."
+                    ),
+                ),
+                "classification_source": st.column_config.TextColumn(
+                    "Source",
+                    width="small",
+                    help=(
+                        "Which method classified this experiment. "
+                        "'scispacy' = NLP/MeSH method, 'ai' = Claude AI, "
+                        "'keyword' = simple keyword matching."
+                    ),
+                ),
             },
         )
 
@@ -499,8 +641,14 @@ with tabs[1]:
 # --- Tab 3: Translational Pipeline ----------------------------------------
 with tabs[2]:
     st.subheader("Translational Pipeline")
+    st.info(
+        "**The translational pipeline shows how ISS research connects to "
+        "clinical application.** For each disease area: how many ISS "
+        "experiments exist, how many clinical trials are running, and what "
+        "the ratio is. A high trial-to-experiment ratio suggests active "
+        "translation from bench to bedside."
+    )
     st.caption(
-        "ISS Experiments → PubMed Publications → Clinical Trials. "
         "Each metric is normalized to its share (%) of its own total so the "
         "three series are visually comparable on the same axis."
     )
@@ -554,6 +702,11 @@ with tabs[2]:
         st.plotly_chart(fig_pipe, width="stretch")
 
         st.markdown("**Translation ratios**")
+        st.caption(
+            "Trials per experiment for each disease area. **Higher** = more "
+            "clinical translation happening. **Lower** = research exists "
+            "but hasn't moved to clinical trials yet."
+        )
         ratio_df = pipeline.copy()
         ratio_df["trial / experiment"] = (
             ratio_df["Trials"] / ratio_df["Experiments"].replace(0, pd.NA)
@@ -587,10 +740,27 @@ with tabs[3]:
                 {p.strip() for s in view_trials["phase"].dropna()
                  for p in str(s).split(",") if p.strip()}
             )
-            phase_pick = st.multiselect("Phase", options=phase_options)
+            phase_pick = st.multiselect(
+                "Phase",
+                options=phase_options,
+                help=(
+                    "Filter to specific clinical trial phases. Phase 1 = "
+                    "safety, Phase 2 = efficacy, Phase 3 = large-scale, "
+                    "Phase 4 = post-market. Many space-related trials "
+                    "have no declared phase (observational / bed rest)."
+                ),
+            )
         with c2:
             status_options = sorted(view_trials["status"].dropna().unique())
-            status_pick = st.multiselect("Status", options=status_options)
+            status_pick = st.multiselect(
+                "Status",
+                options=status_options,
+                help=(
+                    "Filter to specific trial statuses. RECRUITING = "
+                    "actively enrolling participants. COMPLETED = trial "
+                    "finished. WITHDRAWN / TERMINATED = cancelled."
+                ),
+            )
 
         if phase_pick:
             view_trials = view_trials[
@@ -602,13 +772,42 @@ with tabs[3]:
             view_trials = view_trials[view_trials["status"].isin(status_pick)]
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("Trials shown", f"{len(view_trials):,}")
-        m2.metric("Phases", view_trials["phase"].fillna("").replace("", pd.NA).dropna().nunique())
-        m3.metric("Statuses", view_trials["status"].nunique())
+        m1.metric(
+            "Trials shown",
+            f"{len(view_trials):,}",
+            help=(
+                "Number of clinical trials displayed after applying any "
+                "active filters."
+            ),
+        )
+        m2.metric(
+            "Phases",
+            view_trials["phase"].fillna("").replace("", pd.NA).dropna().nunique(),
+            help=(
+                "Number of distinct trial phases in the current view. "
+                "Phase 1 = safety testing, Phase 2 = efficacy, Phase 3 = "
+                "large-scale, Phase 4 = post-market."
+            ),
+        )
+        m3.metric(
+            "Statuses",
+            view_trials["status"].nunique(),
+            help=(
+                "Number of distinct trial statuses. Common statuses: "
+                "RECRUITING (actively enrolling), COMPLETED, "
+                "ACTIVE_NOT_RECRUITING, WITHDRAWN, TERMINATED."
+            ),
+        )
 
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("**By status**")
+            st.caption(
+                "Distribution of trial statuses. *Recruiting* means "
+                "actively looking for participants. *Completed* means the "
+                "trial finished. *Withdrawn* means it was cancelled before "
+                "enrollment."
+            )
             status_counts = (
                 view_trials["status"].value_counts().rename_axis("status")
                 .reset_index(name="count")
@@ -627,6 +826,11 @@ with tabs[3]:
 
         with col_b:
             st.markdown("**By phase**")
+            st.caption(
+                "Trial phases indicate how far along the clinical testing "
+                "process a treatment is. Phase 3 trials are the most "
+                "advanced (closest to approval)."
+            )
             phase_long = (
                 view_trials["phase"].fillna("(unspecified)").replace("", "(unspecified)")
                 .str.split(", ").explode().str.strip()
@@ -679,14 +883,42 @@ with tabs[4]:
         by_strength = link_summary.get("links_by_strength", {})
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total links", f"{total_links:,}")
+        m1.metric(
+            "Total links",
+            f"{total_links:,}",
+            help=(
+                "Number of connections found between clinical trials and "
+                "ISS experiments. A link means both study the same medical "
+                "condition (share MeSH disease codes)."
+            ),
+        )
         m2.metric(
             "Trials linked",
             f"{trials_linked:,}",
             delta=f"{(trials_linked/total_trials_n*100):.0f}%" if total_trials_n else None,
+            help=(
+                "How many of the 534 clinical trials have at least one "
+                "matching ISS experiment. ~21% coverage — the rest study "
+                "conditions with no ISS counterpart."
+            ),
         )
-        m3.metric("Experiments linked", f"{exp_linked:,}")
-        m4.metric("Strong links", f"{int(by_strength.get('strong', 0)):,}")
+        m3.metric(
+            "Experiments linked",
+            f"{exp_linked:,}",
+            help=(
+                "How many ISS experiments have at least one matching "
+                "clinical trial."
+            ),
+        )
+        m4.metric(
+            "Strong links",
+            f"{int(by_strength.get('strong', 0)):,}",
+            help=(
+                "Links where the trial and experiment share the exact same "
+                "MeSH disease code AND have high text similarity. These "
+                "are the most confident connections."
+            ),
+        )
 
         st.caption(
             "Deterministic linkage via SciSpacy MeSH extraction on trials + "
@@ -701,17 +933,31 @@ with tabs[4]:
                 "Link strength",
                 options=["strong", "moderate", "weak"],
                 default=["strong", "moderate"],
+                help=(
+                    "Filter by confidence level. **Strong** = shared MeSH "
+                    "codes + high text similarity. **Moderate** = shared "
+                    "MeSH codes with moderate similarity. **Weak** = "
+                    "shared disease area with low text overlap."
+                ),
             )
         with fcol2:
             linked_area_pick = st.multiselect(
                 "Disease area",
                 options=DISEASE_AREA_NAMES,
                 default=[],
-                help="Matches experiments whose shared area overlaps one of these.",
+                help=(
+                    "Show only links involving experiments or trials in "
+                    "these disease areas."
+                ),
             )
         with fcol3:
             link_search = st.text_input(
-                "Search trial / experiment title", placeholder="pain, thrombosis, NCT..."
+                "Search trial / experiment title",
+                placeholder="pain, thrombosis, NCT...",
+                help=(
+                    "Free-text search across trial title, experiment "
+                    "title, NCT ID, or OS ID. Case-insensitive."
+                ),
             )
 
         view_links = links_df.copy()
@@ -767,19 +1013,110 @@ with tabs[4]:
             height=520,
             hide_index=True,
             column_config={
-                "link_strength": st.column_config.TextColumn("Strength", width="small"),
-                "final_score": st.column_config.NumberColumn("Score", format="%.2f", width="small"),
-                "nct_id": st.column_config.TextColumn("NCT ID", width="small"),
-                "trial_title": st.column_config.TextColumn("Trial", width="large"),
-                "trial_url": st.column_config.LinkColumn("Trial link", display_text="open"),
-                "osID": st.column_config.TextColumn("OS ID", width="small"),
-                "experiment_title": st.column_config.TextColumn("Experiment", width="large"),
-                "experiment_url": st.column_config.LinkColumn("Experiment link", display_text="open"),
-                "shared_areas": st.column_config.TextColumn("Shared areas", width="medium"),
-                "shared_mesh_ids": st.column_config.TextColumn("Shared MeSH", width="small"),
-                "mesh_score": st.column_config.NumberColumn("MeSH", format="%.2f", width="small"),
-                "area_score": st.column_config.NumberColumn("Area", format="%.2f", width="small"),
-                "cosine_score": st.column_config.NumberColumn("Text", format="%.2f", width="small"),
+                "link_strength": st.column_config.TextColumn(
+                    "Strength",
+                    width="small",
+                    help=(
+                        "Confidence of the connection: **Strong** (high "
+                        "MeSH + text overlap), **Moderate** (good MeSH "
+                        "overlap), **Weak** (area match only)."
+                    ),
+                ),
+                "final_score": st.column_config.NumberColumn(
+                    "Score",
+                    format="%.2f",
+                    width="small",
+                    help=(
+                        "Combined linkage score (0-1) from MeSH overlap "
+                        "(50%), disease area match (20%), and text "
+                        "similarity (30%). Higher = stronger connection."
+                    ),
+                ),
+                "nct_id": st.column_config.TextColumn(
+                    "NCT ID",
+                    width="small",
+                    help=(
+                        "ClinicalTrials.gov unique identifier. Click the "
+                        "trial link to open the full record on "
+                        "ClinicalTrials.gov."
+                    ),
+                ),
+                "trial_title": st.column_config.TextColumn(
+                    "Trial",
+                    width="large",
+                    help="Title of the clinical trial as registered on ClinicalTrials.gov.",
+                ),
+                "trial_url": st.column_config.LinkColumn(
+                    "Trial link",
+                    display_text="open",
+                    help="Open the trial's full record on ClinicalTrials.gov.",
+                ),
+                "osID": st.column_config.TextColumn(
+                    "OS ID",
+                    width="small",
+                    help=(
+                        "NASA OSDR experiment identifier. Links to the "
+                        "experiment record on osdr.nasa.gov."
+                    ),
+                ),
+                "experiment_title": st.column_config.TextColumn(
+                    "Experiment",
+                    width="large",
+                    help="Title of the ISS experiment as registered in OSDR.",
+                ),
+                "experiment_url": st.column_config.LinkColumn(
+                    "Experiment link",
+                    display_text="open",
+                    help="Open the experiment's record on osdr.nasa.gov.",
+                ),
+                "shared_areas": st.column_config.TextColumn(
+                    "Shared areas",
+                    width="medium",
+                    help=(
+                        "SNIH disease areas that both the trial and "
+                        "experiment belong to."
+                    ),
+                ),
+                "shared_mesh_ids": st.column_config.TextColumn(
+                    "Shared MeSH",
+                    width="small",
+                    help=(
+                        "The specific MeSH codes that both the trial and "
+                        "experiment share. These are the medical "
+                        "conditions that connect them."
+                    ),
+                ),
+                "mesh_score": st.column_config.NumberColumn(
+                    "MeSH",
+                    format="%.2f",
+                    width="small",
+                    help=(
+                        "How many medical terms (MeSH codes) the trial "
+                        "and experiment have in common, relative to the "
+                        "total terms. 1.0 = perfect overlap."
+                    ),
+                ),
+                "area_score": st.column_config.NumberColumn(
+                    "Area",
+                    format="%.2f",
+                    width="small",
+                    help=(
+                        "Disease-area overlap score: how many of the "
+                        "trial's SNIH areas are also assigned to the "
+                        "experiment. 1.0 = all areas match."
+                    ),
+                ),
+                "cosine_score": st.column_config.NumberColumn(
+                    "Text",
+                    format="%.2f",
+                    width="small",
+                    help=(
+                        "Text similarity between trial and experiment "
+                        "descriptions. Based on TF-IDF, a standard text "
+                        "comparison method. 0.15+ is meaningful for "
+                        "scientific text."
+                    ),
+                ),
             },
         )
 
@@ -810,14 +1147,53 @@ with tabs[5]:
         coverage = float(tiered_summary.get("coverage_percent", 0.0))
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Tier 1 — Confirmed", f"{t1:,}",
-                  delta=f"{t1/total_n*100:.1f}% of total")
-        c2.metric("Tier 2 — Probable", f"{t2:,}",
-                  delta=f"{t2/total_n*100:.1f}% of total")
-        c3.metric("Tier 3 — Uncertain", f"{t3:,}",
-                  delta=f"{t3/total_n*100:.1f}% of total")
-        c4.metric("Tier 0 — Not health", f"{t0:,}",
-                  delta=f"{t0/total_n*100:.1f}% of total")
+        c1.metric(
+            "Tier 1 — Confirmed",
+            f"{t1:,}",
+            delta=f"{t1/total_n*100:.1f}% of total",
+            help=(
+                "Experiments where BOTH the NLP method (MeSH-based) AND "
+                "the AI method agree the experiment is health-related "
+                "AND they agree on at least one disease area. **Highest "
+                "confidence** — two independent methods confirmed the "
+                "classification."
+            ),
+        )
+        c2.metric(
+            "Tier 2 — Probable",
+            f"{t2:,}",
+            delta=f"{t2/total_n*100:.1f}% of total",
+            help=(
+                "Experiments where the NLP method found no disease terms "
+                "BUT the AI classified it as health-related with high "
+                "confidence (≥70%). The AI inferred disease relevance "
+                "from context (e.g., 'osteoblast differentiation' implies "
+                "bone disease). Plausible but not evidence-backed by "
+                "medical dictionary codes."
+            ),
+        )
+        c3.metric(
+            "Tier 3 — Uncertain",
+            f"{t3:,}",
+            delta=f"{t3/total_n*100:.1f}% of total",
+            help=(
+                "Experiments where the NLP method found no disease terms "
+                "AND the AI classified it with low confidence (<70%). "
+                "These need expert review to determine if they're truly "
+                "health-related."
+            ),
+        )
+        c4.metric(
+            "Tier 0 — Not health",
+            f"{t0:,}",
+            delta=f"{t0/total_n*100:.1f}% of total",
+            help=(
+                "Experiments that neither method classified as "
+                "health-related. These are likely basic science (plant "
+                "biology, fluid physics, materials science) without "
+                "direct disease relevance."
+            ),
+        )
 
         st.caption(
             f"**Tiered coverage:** {t1+t2+t3:,} of {total_n:,} experiments are "
@@ -860,11 +1236,22 @@ with tabs[5]:
             legend=dict(orientation="h", yanchor="bottom", y=-0.6, x=0),
         )
         st.plotly_chart(fig_tier, width="stretch")
+        st.caption(
+            "Stacked bar showing how the 3,829 experiments break down by "
+            "tier. Green = both methods agree (Tier 1). Blue = AI confident "
+            "alone (Tier 2). Amber = AI low confidence (Tier 3). Grey = "
+            "neither method tagged it (Tier 0)."
+        )
 
         st.divider()
 
         # ---- Section B: Per-Disease-Area Breakdown ----
         st.markdown("### Per disease area")
+        st.caption(
+            "For each SNIH disease area, how many experiments fall into "
+            "each tier. Useful for spotting where the two methods agree "
+            "(big Tier 1 bars) vs. where AI is doing most of the work."
+        )
         per_area = tiered_summary.get("per_disease_area", {})
         area_rows = []
         for area in DISEASE_AREA_NAMES:
@@ -920,6 +1307,12 @@ with tabs[5]:
 
         # ---- Section C: Method Comparison ----
         st.markdown("### Method comparison (NLP vs AI)")
+        st.caption(
+            "Side-by-side counts of how each method classifies experiments "
+            "into the 10 SNIH disease areas. NLP/MeSH (green) tags fewer "
+            "experiments but with traceable medical evidence; AI Extended "
+            "(purple) is broader but inferred from context."
+        )
 
         nlp_counts = disease_count_table(
             classified_nlp_df[classified_nlp_df["health_related"]]
@@ -970,14 +1363,44 @@ with tabs[5]:
             disagree = int(n_cmp - agree_health)
 
             am1, am2, am3, am4 = st.columns(4)
-            am1.metric("Agree on health/not", f"{agree_health/n_cmp*100:.1f}%",
-                       delta=f"{agree_health:,} / {n_cmp:,}")
-            am2.metric("Exact disease-area match", f"{agree_exact/n_cmp*100:.1f}%",
-                       delta=f"{agree_exact:,}")
-            am3.metric("≥1 area overlap", f"{agree_overlap/n_cmp*100:.1f}%",
-                       delta=f"{agree_overlap:,}")
-            am4.metric("Complete disagreement", f"{disagree/n_cmp*100:.1f}%",
-                       delta=f"{disagree:,}", delta_color="inverse")
+            am1.metric(
+                "Agree on health/not",
+                f"{agree_health/n_cmp*100:.1f}%",
+                delta=f"{agree_health:,} / {n_cmp:,}",
+                help=(
+                    "Percentage of experiments where NLP and AI give the "
+                    "same yes/no answer on whether the experiment is "
+                    "health-related."
+                ),
+            )
+            am2.metric(
+                "Exact disease-area match",
+                f"{agree_exact/n_cmp*100:.1f}%",
+                delta=f"{agree_exact:,}",
+                help=(
+                    "Percentage where NLP and AI assign exactly the same "
+                    "set of disease areas."
+                ),
+            )
+            am3.metric(
+                "≥1 area overlap",
+                f"{agree_overlap/n_cmp*100:.1f}%",
+                delta=f"{agree_overlap:,}",
+                help=(
+                    "Percentage where NLP and AI share at least one "
+                    "disease area, even if they don't match completely."
+                ),
+            )
+            am4.metric(
+                "Complete disagreement",
+                f"{disagree/n_cmp*100:.1f}%",
+                delta=f"{disagree:,}",
+                delta_color="inverse",
+                help=(
+                    "Percentage where the two methods have zero overlap "
+                    "— completely different conclusions."
+                ),
+            )
 
             # Scatter — area count NLP vs area count AI per experiment
             scatter_src = comparison_df.copy()
@@ -1016,6 +1439,12 @@ with tabs[5]:
 
         # ---- Section D: Experiment Explorer ----
         st.markdown("### Experiment explorer")
+        st.caption(
+            "Filterable table of all 3,829 experiments with tier "
+            "assignment, AI confidence score, and the MeSH evidence trail "
+            "(when available). Use this to drill into any single "
+            "classification."
+        )
         ex_col1, ex_col2, ex_col3 = st.columns([2, 2, 3])
         with ex_col1:
             tier_pick = st.multiselect(
@@ -1023,6 +1452,11 @@ with tabs[5]:
                 options=["Tier 1 — Confirmed", "Tier 2 — Probable",
                          "Tier 3 — Uncertain", "Tier 0 — Not health"],
                 default=["Tier 1 — Confirmed", "Tier 2 — Probable"],
+                help=(
+                    "Filter by confidence tier. Default shows Tier 1 + "
+                    "Tier 2 — the experiments worth treating as "
+                    "health-related for analysis."
+                ),
             )
         with ex_col2:
             tier_area_pick = st.multiselect(
@@ -1030,12 +1464,17 @@ with tabs[5]:
                 options=DISEASE_AREA_NAMES,
                 default=[],
                 key="tier_area_pick",
+                help=(
+                    "Show only experiments tagged with one of these SNIH "
+                    "disease areas."
+                ),
             )
         with ex_col3:
             tier_search = st.text_input(
                 "Search title or osID",
                 placeholder="bone, OS-118, ...",
                 key="tier_search",
+                help="Free-text search on experiment title or OS ID.",
             )
 
         tier_label_to_int = {
@@ -1083,17 +1522,81 @@ with tabs[5]:
             height=480,
             hide_index=True,
             column_config={
-                "osID": st.column_config.TextColumn("OS ID", width="small"),
-                "title": st.column_config.TextColumn("Title", width="large"),
-                "tier": st.column_config.NumberColumn("Tier", width="small"),
-                "tier_label": st.column_config.TextColumn("Tier label", width="medium"),
-                "disease_areas": st.column_config.TextColumn("Disease areas", width="medium"),
-                "primary_disease_area": st.column_config.TextColumn("Primary", width="medium"),
-                "ai_confidence": st.column_config.NumberColumn("AI conf", format="%.2f", width="small"),
-                "nlp_classified": st.column_config.CheckboxColumn("NLP?", width="small"),
-                "ai_classified": st.column_config.CheckboxColumn("AI?", width="small"),
-                "nlp_mesh_evidence": st.column_config.TextColumn("MeSH evidence", width="medium"),
-                "classification_source": st.column_config.TextColumn("Source", width="small"),
+                "osID": st.column_config.TextColumn(
+                    "OS ID",
+                    width="small",
+                    help="NASA OSDR experiment identifier (format OS-XXX).",
+                ),
+                "title": st.column_config.TextColumn(
+                    "Title",
+                    width="large",
+                    help="Official title of the experiment from OSDR.",
+                ),
+                "tier": st.column_config.NumberColumn(
+                    "Tier",
+                    width="small",
+                    help=(
+                        "0 = not health, 1 = NLP+AI agree, 2 = AI confident, "
+                        "3 = AI low confidence."
+                    ),
+                ),
+                "tier_label": st.column_config.TextColumn(
+                    "Tier label",
+                    width="medium",
+                    help="Human-readable name for the tier.",
+                ),
+                "disease_areas": st.column_config.TextColumn(
+                    "Disease areas",
+                    width="medium",
+                    help=(
+                        "SNIH disease areas assigned. For Tier 1, taken "
+                        "from NLP (more precise). For Tier 2/3, from AI."
+                    ),
+                ),
+                "primary_disease_area": st.column_config.TextColumn(
+                    "Primary",
+                    width="medium",
+                    help="Single disease area with the strongest evidence.",
+                ),
+                "ai_confidence": st.column_config.NumberColumn(
+                    "AI conf",
+                    format="%.2f",
+                    width="small",
+                    help=(
+                        "AI's max confidence score for any disease area "
+                        "(0-1). The Tier 2 / Tier 3 split happens at 0.7."
+                    ),
+                ),
+                "nlp_classified": st.column_config.CheckboxColumn(
+                    "NLP?",
+                    width="small",
+                    help=(
+                        "Did the NLP method find a literal disease term "
+                        "in the experiment text?"
+                    ),
+                ),
+                "ai_classified": st.column_config.CheckboxColumn(
+                    "AI?",
+                    width="small",
+                    help="Did the AI tag this experiment as health-related?",
+                ),
+                "nlp_mesh_evidence": st.column_config.TextColumn(
+                    "MeSH evidence",
+                    width="medium",
+                    help=(
+                        "Pipe-separated MeSH Descriptor IDs (D-numbers) "
+                        "that NLP found. Empty for Tier 2/3 (NLP didn't "
+                        "fire). These are the audit trail."
+                    ),
+                ),
+                "classification_source": st.column_config.TextColumn(
+                    "Source",
+                    width="small",
+                    help=(
+                        "How the row was classified: nlp+ai (Tier 1), "
+                        "ai_high (Tier 2), ai_low (Tier 3), or none (Tier 0)."
+                    ),
+                ),
             },
         )
         st.download_button(
@@ -1107,6 +1610,12 @@ with tabs[5]:
 
         # ---- Section E: Backend Status ----
         st.markdown("### Backend status")
+        st.info(
+            "The dashboard supports three classification backends. Only "
+            "one (SciSpacy) is currently active. When PubTator or "
+            "MetaMapLite are activated, their results will appear here "
+            "for cross-method comparison."
+        )
         st.markdown(
             "| Backend | Status | Notes |\n"
             "|---|---|---|\n"
@@ -1130,18 +1639,85 @@ with tabs[5]:
         )
 
 
-# --- Tab 7: Approved Therapies & Devices (stub) ---------------------------
+# --- Tab 7: Approved Therapies & Devices ----------------------------------
 with tabs[6]:
     st.subheader("Approved Therapies & Devices")
     if therapies_df.empty:
         empty_state("No therapies data yet.", "08_research_therapies.py")
     else:
-        st.dataframe(therapies_df, width="stretch")
+        st.info(
+            "These are drugs and medical devices that either originated "
+            "from space research or were significantly advanced by "
+            "experiments conducted on the ISS. **This is the end of the "
+            "translational pipeline** — from space experiment to "
+            "approved treatment."
+        )
+        st.dataframe(
+            therapies_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "name": st.column_config.TextColumn(
+                    "Name",
+                    width="medium",
+                    help="Name of the approved drug or medical device.",
+                ),
+                "type": st.column_config.TextColumn(
+                    "Type",
+                    width="small",
+                    help="Drug (pharmaceutical) or Device (medical equipment).",
+                ),
+                "disease_area": st.column_config.TextColumn(
+                    "Disease area",
+                    width="medium",
+                    help="The SNIH disease area this therapy addresses.",
+                ),
+                "approval_year": st.column_config.NumberColumn(
+                    "Approved",
+                    format="%d",
+                    width="small",
+                    help="Year the therapy was approved by a regulatory body.",
+                ),
+                "approving_body": st.column_config.TextColumn(
+                    "Regulator",
+                    width="small",
+                    help="Approving regulatory body (e.g. FDA, EMA).",
+                ),
+                "iss_direct": st.column_config.TextColumn(
+                    "ISS direct?",
+                    width="small",
+                    help=(
+                        "Yes = the therapy depended directly on an ISS "
+                        "experiment. No = it benefited from NASA-developed "
+                        "technology adapted for terrestrial use."
+                    ),
+                ),
+                "evidence_chain": st.column_config.TextColumn(
+                    "Evidence chain",
+                    width="large",
+                    help=(
+                        "Brief narrative of how space research contributed "
+                        "to this therapy's development."
+                    ),
+                ),
+                "sources": st.column_config.LinkColumn(
+                    "Sources",
+                    help="Public source URLs (semicolon-separated).",
+                ),
+            },
+        )
 
 
 # --- Tab 8: Gap Analysis --------------------------------------------------
 with tabs[7]:
     st.subheader("Gap Analysis")
+    st.info(
+        "**The gap analysis identifies where ISS research investment "
+        "doesn't match SNIH priority needs.** Disease areas with many "
+        "experiments but few trials have low translation. Areas with few "
+        "experiments but high Saudi disease burden represent research "
+        "opportunities."
+    )
     if classified_df.empty or trials_df.empty or pubs_per_area.empty:
         empty_state(
             "Need experiments, trials, and publications.",
@@ -1180,6 +1756,12 @@ with tabs[7]:
             yaxis=dict(autorange="reversed"),
         )
         st.markdown("**Research intensity heatmap** (normalised per column)")
+        st.caption(
+            "Shows how research effort (experiments, trials, publications) "
+            "is distributed across disease areas. **Darker cells = more "
+            "activity.** Normalised per column so you can compare across "
+            "different metrics."
+        )
         st.plotly_chart(fig_heat, width="stretch")
 
         # Radar — normalise once across all metrics for shape comparison
@@ -1203,6 +1785,12 @@ with tabs[7]:
             legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.05),
         )
         st.markdown("**Disease area comparison** (each axis normalised to its max)")
+        st.caption(
+            "Each axis shows a different metric (experiments, trials, "
+            "publications) normalised to its maximum. **Wider shapes** = "
+            "more balanced coverage. **Narrow spikes** = uneven research "
+            "distribution."
+        )
         st.plotly_chart(fig_radar, width="stretch")
 
         # Text summary
@@ -1221,15 +1809,27 @@ with tabs[7]:
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("**Most-researched**")
+            st.caption(
+                "Disease areas with the most ISS experiments. These are "
+                "well-covered by space research."
+            )
             for area, n in most_researched.items():
                 st.write(f"- {area} — {int(n)} experiments")
         with c2:
             st.markdown("**Least-researched**")
+            st.caption(
+                "Disease areas with the fewest ISS experiments. These may "
+                "represent gaps or opportunities for new space research."
+            )
             for area, n in least_researched.items():
                 st.write(f"- {area} — {int(n)} experiments")
         with c3:
             st.markdown("**Weakest translation**")
-            st.caption("low trials-per-experiment ratio")
+            st.caption(
+                "Disease areas where the ratio of clinical trials to "
+                "experiments is lowest. Research exists but isn't "
+                "translating to clinical testing."
+            )
             for area, ratio in worst_translation.items():
                 exp = int(gap.loc[area, "Experiments"])
                 trials = int(gap.loc[area, "Trials"])
@@ -1239,7 +1839,15 @@ with tabs[7]:
 # --- Tab 9: Disease Deep-Dive ---------------------------------------------
 with tabs[8]:
     st.subheader("Disease Deep-Dive")
-    pick = st.selectbox("Select a disease area", DISEASE_AREA_NAMES)
+    pick = st.selectbox(
+        "Select a disease area",
+        DISEASE_AREA_NAMES,
+        help=(
+            "Pick one of the 10 SNIH priority disease areas to see a "
+            "detailed breakdown of experiments, trials, and links for "
+            "that specific area."
+        ),
+    )
     st.caption(
         "Per-disease narrative summaries land here once script 09 generates "
         "the gap analysis JSON."
@@ -1267,11 +1875,46 @@ with tabs[8]:
         linked_exp_count = int(area_links["osID"].nunique()) if not area_links.empty else 0
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Tier 1 confirmed", f"{t1_n:,}")
-        m2.metric("Tier 2 probable", f"{t2_n:,}")
-        m3.metric("Tier 3 uncertain", f"{t3_n:,}")
-        m4.metric("Linked trials", f"{linked_trials_count:,}")
-        m5.metric("Linked experiments", f"{linked_exp_count:,}")
+        m1.metric(
+            "Tier 1 confirmed",
+            f"{t1_n:,}",
+            help=(
+                "Experiments in this disease area confirmed by both NLP "
+                "and AI methods."
+            ),
+        )
+        m2.metric(
+            "Tier 2 probable",
+            f"{t2_n:,}",
+            help=(
+                "Experiments in this disease area identified by AI only "
+                "(high confidence ≥ 0.7)."
+            ),
+        )
+        m3.metric(
+            "Tier 3 uncertain",
+            f"{t3_n:,}",
+            help=(
+                "Experiments in this disease area identified by AI only "
+                "(low confidence < 0.7)."
+            ),
+        )
+        m4.metric(
+            "Linked trials",
+            f"{linked_trials_count:,}",
+            help=(
+                "Clinical trials linked to experiments in this disease "
+                "area via shared MeSH codes."
+            ),
+        )
+        m5.metric(
+            "Linked experiments",
+            f"{linked_exp_count:,}",
+            help=(
+                "Experiments in this disease area that have at least "
+                "one linked clinical trial."
+            ),
+        )
         if tiered_summary:
             st.caption(
                 f"**{pick}**: {t1_n + t2_n:,} experiments by default "
@@ -1304,13 +1947,50 @@ with tabs[8]:
                 width="stretch",
                 hide_index=True,
                 column_config={
-                    "link_strength": st.column_config.TextColumn("Strength", width="small"),
-                    "final_score": st.column_config.NumberColumn("Score", format="%.2f", width="small"),
-                    "nct_id": st.column_config.TextColumn("NCT ID", width="small"),
-                    "trial_title": st.column_config.TextColumn("Trial", width="large"),
-                    "osID": st.column_config.TextColumn("OS ID", width="small"),
-                    "experiment_title": st.column_config.TextColumn("Experiment", width="large"),
-                    "shared_mesh_ids": st.column_config.TextColumn("Shared MeSH"),
+                    "link_strength": st.column_config.TextColumn(
+                        "Strength",
+                        width="small",
+                        help=(
+                            "Strong = high MeSH + text overlap. Moderate = "
+                            "good MeSH overlap. Weak = area match only."
+                        ),
+                    ),
+                    "final_score": st.column_config.NumberColumn(
+                        "Score",
+                        format="%.2f",
+                        width="small",
+                        help=(
+                            "Combined score (0-1) from MeSH 50%, area 20%, "
+                            "text 30%."
+                        ),
+                    ),
+                    "nct_id": st.column_config.TextColumn(
+                        "NCT ID",
+                        width="small",
+                        help="ClinicalTrials.gov identifier.",
+                    ),
+                    "trial_title": st.column_config.TextColumn(
+                        "Trial",
+                        width="large",
+                        help="Title of the clinical trial.",
+                    ),
+                    "osID": st.column_config.TextColumn(
+                        "OS ID",
+                        width="small",
+                        help="NASA OSDR experiment identifier.",
+                    ),
+                    "experiment_title": st.column_config.TextColumn(
+                        "Experiment",
+                        width="large",
+                        help="Title of the ISS experiment.",
+                    ),
+                    "shared_mesh_ids": st.column_config.TextColumn(
+                        "Shared MeSH",
+                        help=(
+                            "MeSH disease codes shared by both. These are "
+                            "the medical conditions that connect them."
+                        ),
+                    ),
                 },
             )
 
@@ -1318,27 +1998,79 @@ with tabs[8]:
 # --- Tab 10: Sources & Methods --------------------------------------------
 with tabs[9]:
     st.subheader("Sources & Methods")
+
+    st.markdown("### How to read this dashboard")
+    st.markdown(
+        "This dashboard maps **3,829 International Space Station (ISS) "
+        "experiments** to **10 Saudi National Institutes of Health (SNIH) "
+        "priority disease areas**."
+    )
+    st.markdown("**How to use:**")
+    st.markdown(
+        "1. Start with the **Overview** tab to see the big picture.\n"
+        "2. Use the sidebar to switch between **NLP/MeSH** (precise) and "
+        "**AI Extended** (broad) classification methods.\n"
+        "3. Filter by disease area to focus on specific health priorities.\n"
+        "4. Use the **Classification Comparison** tab to understand "
+        "confidence levels (Tier 1/2/3).\n"
+        "5. Check **Trial-Experiment Links** to see which space research "
+        "connects to clinical trials.\n"
+        "6. Use **Gap Analysis** to identify research opportunities.\n"
+        "7. Deep-dive into any disease area for detailed breakdowns."
+    )
+    st.markdown("**Classification methods:**")
+    st.markdown(
+        "- **NLP/MeSH (Default):** Uses biomedical named-entity "
+        "recognition (SciSpacy) to find disease terms in experiment text, "
+        "then maps them to SNIH areas via MeSH medical dictionary codes. "
+        "Deterministic — same input always gives the same output. "
+        "Classifies ~11% of experiments. Every classification has a "
+        "traceable MeSH code as evidence.\n"
+        "- **AI Extended:** Uses Claude (an AI language model) to read "
+        "experiment descriptions and infer disease relevance. Classifies "
+        "~52% of experiments. Catches implied relevance (e.g., 'bone "
+        "remodeling' → musculoskeletal) but is non-deterministic and not "
+        "citable in scientific publications.\n"
+        "- **Tiered View:** Combines both methods. **Tier 1 (Confirmed)** "
+        "= both agree. **Tier 2 (Probable)** = AI only, high confidence. "
+        "**Tier 3 (Uncertain)** = AI only, low confidence."
+    )
+    st.markdown("**Trial linkage:**")
+    st.markdown(
+        "Trials are linked to experiments when they share the same "
+        "medical condition (MeSH code). The link score combines: MeSH "
+        "code overlap (50%), disease area match (20%), and text "
+        "similarity (30%). Links are labeled **Strong**, **Moderate**, "
+        "or **Weak** based on this score."
+    )
+
+    st.divider()
+
+    st.markdown("### Data sources")
     osdr_count = int(classified_df["osID"].astype(str).str.startswith("OS-").sum()) \
         if not classified_df.empty else 0
     ssre_count = int(classified_df["osID"].astype(str).str.startswith("SSRE-").sum()) \
         if not classified_df.empty else 0
     st.markdown(
-        f"""
-        **Experiment catalog** ({len(classified_df):,} total):
-        {osdr_count:,} from NASA OSDR (omics-focused datasets, aim-level)
-        + {ssre_count:,} from NASA Space Station Research Explorer
-        (SSRE — full ISS investigation catalog across NASA, ESA, JAXA,
-        ROSCOSMOS, and CSA).
-
-        | Source | URL | Used for |
-        |---|---|---|
-        | NASA OSDR | https://osdr.nasa.gov | Omics datasets (aim-level) |
-        | NASA SSRE — All Experiments Report | https://www.nasa.gov/mission/station/research-explorer/ | Full ISS investigation catalog (all 5 partner agencies) |
-        | NASA SSRE — All Publications Report | https://www.nasa.gov/mission/station/research-explorer/ | Publication titles linked to each SSRE investigation |
-        | ClinicalTrials.gov | https://clinicaltrials.gov/api/v2/studies | Trials filtered by space keywords |
-        | PubMed E-utilities | https://eutils.ncbi.nlm.nih.gov/entrez/eutils/ | Per-disease publication counts |
-        """
+        f"**Experiment catalog** ({len(classified_df):,} total): "
+        f"{osdr_count:,} from NASA OSDR (omics-focused datasets, "
+        f"aim-level) + {ssre_count:,} from NASA Space Station Research "
+        f"Explorer (SSRE — full ISS investigation catalog across NASA, "
+        f"ESA, JAXA, ROSCOSMOS, and CSA)."
     )
+    st.markdown(
+        "| Source | URL | Used for |\n"
+        "|---|---|---|\n"
+        "| NASA OSDR | https://osdr.nasa.gov | Omics datasets (aim-level) |\n"
+        "| NASA SSRE — All Experiments Report | https://www.nasa.gov/mission/station/research-explorer/ | Full ISS investigation catalog (all 5 partner agencies) |\n"
+        "| NASA SSRE — All Publications Report | https://www.nasa.gov/mission/station/research-explorer/ | Publication titles linked to each SSRE investigation |\n"
+        "| ClinicalTrials.gov | https://clinicaltrials.gov/api/v2/studies | Trials filtered by space keywords |\n"
+        "| PubMed E-utilities | https://eutils.ncbi.nlm.nih.gov/entrez/eutils/ | Per-disease publication counts |\n"
+        "| NLM MeSH (Medical Subject Headings) | https://www.nlm.nih.gov/mesh/ | Medical vocabulary used for the classification crosswalk |"
+    )
+    st.caption("All data sources are publicly available and free.")
+
+    st.divider()
     st.markdown("**Classification methodology**")
     st.markdown(
         "Experiments are classified against SNIH disease areas using "
@@ -1398,4 +2130,303 @@ with tabs[9]:
             f"dataset — loosening thresholds would trade precision for "
             f"coverage. See `data/processed/trial_experiment_links.csv` and "
             f"`data/processed/trial_linkage_summary.json`."
+        )
+
+
+# --- Tab 11: User Manual --------------------------------------------------
+with tabs[10]:
+    st.subheader("📖 User Manual")
+    st.caption(
+        "A plain-English guide to everything in this dashboard. If you "
+        "have a question, look here first."
+    )
+
+    # ---- Getting Started ----
+    st.markdown("## Getting started")
+    st.markdown(
+        "**What this dashboard shows.** Every experiment ever run on the "
+        "International Space Station (ISS) — 3,829 in total — sorted "
+        "into the 10 disease areas that matter most for Saudi Arabia "
+        "(the SNIH priorities). Alongside that, every clinical trial on "
+        "Earth that touches the same conditions, and every approved "
+        "drug or device that came from space research."
+    )
+    st.markdown(
+        "**Why it exists.** To answer one question: *Which space "
+        "research is actually relevant to the diseases that matter to "
+        "us, and how much of it has reached patients?*"
+    )
+    st.markdown(
+        "**How to use it.**"
+    )
+    st.markdown(
+        "1. **Look at the Overview** — that's the big picture in one "
+        "page.\n"
+        "2. **Use the sidebar** — pick a classification method, filter "
+        "to a disease area you care about, hide non-health experiments "
+        "if you want a clean view.\n"
+        "3. **Read the tooltips** — every number, label, and chart on "
+        "the dashboard has a `?` icon. Hover it for a plain-English "
+        "explanation.\n"
+        "4. **Drill down** — when something looks interesting, the "
+        "Disease Deep-Dive tab shows everything for one disease area, "
+        "and Trial-Experiment Links shows the bench-to-bedside "
+        "connections."
+    )
+
+    st.divider()
+
+    # ---- Tab-by-Tab Guide ----
+    st.markdown("## Tab-by-tab guide")
+    st.markdown(
+        "**1. Overview.** The dashboard's home page. Top-line numbers "
+        "(experiments, trials, publications), a bar chart of "
+        "experiments per disease area, the health-vs-not-health share, "
+        "and the most common non-health categories. Start here."
+    )
+    st.markdown(
+        "**2. Experiment Explorer.** A searchable table of all 3,829 "
+        "experiments. Use this when you want to find a specific "
+        "experiment by name or look at every experiment in a disease "
+        "area. The classification source column tells you which "
+        "method made the call."
+    )
+    st.markdown(
+        "**3. Translational Pipeline.** Side-by-side view of "
+        "experiments → publications → clinical trials per disease "
+        "area, plus a translation-ratio table. Use this to see "
+        "where research is actually moving toward patients vs. "
+        "where it's stuck at the lab bench."
+    )
+    st.markdown(
+        "**4. Clinical Trials.** All 534 space-related trials from "
+        "ClinicalTrials.gov, with phase and status filters. Click "
+        "the URL column to open any trial's full record."
+    )
+    st.markdown(
+        "**5. Trial-Experiment Links.** Connections between specific "
+        "trials and specific experiments — based on shared MeSH "
+        "disease codes. Strong links are the most confident "
+        "(same medical condition + similar text). Use this to find "
+        "the bench-to-bedside threads."
+    )
+    st.markdown(
+        "**6. Classification Comparison.** Shows how the two "
+        "classification methods agree and disagree. The four tier "
+        "cards (Confirmed / Probable / Uncertain / Not health) are "
+        "the most important thing — they tell you how confident to "
+        "be in any given experiment's tag."
+    )
+    st.markdown(
+        "**7. Approved Therapies.** Drugs and devices that came out "
+        "of space research and got approved for Earth use. Small "
+        "list, but the most concrete proof that ISS research can "
+        "reach patients."
+    )
+    st.markdown(
+        "**8. Gap Analysis.** Heatmap, radar chart, and three "
+        "highlight cards (most-researched, least-researched, "
+        "weakest translation). Use this to spot research gaps and "
+        "opportunities."
+    )
+    st.markdown(
+        "**9. Disease Deep-Dive.** Pick one disease area and see "
+        "everything: tier counts, linked trials, linked experiments, "
+        "the experiments themselves, and the strongest trial-"
+        "experiment links for that area."
+    )
+    st.markdown(
+        "**10. Sources & Methods.** Where the data comes from, how "
+        "it's classified, how trials are linked, and the data-"
+        "source URLs. Read this if you want to cite the dashboard "
+        "or understand the methodology."
+    )
+
+    st.divider()
+
+    # ---- Glossary ----
+    st.markdown("## Glossary")
+    st.markdown(
+        "Plain-English definitions for every term you'll see on the "
+        "dashboard:"
+    )
+    glossary = [
+        ("**SNIH**",
+         "Saudi National Institute of Health. Sets the country's 10 "
+         "priority disease areas. The whole dashboard is organised around "
+         "these areas."),
+        ("**MeSH**",
+         "Medical Subject Headings. The U.S. National Library of "
+         "Medicine's official medical vocabulary — every disease has a "
+         "unique MeSH code (e.g. D010024 = Osteoporosis). It's how this "
+         "dashboard knows two pieces of text are about the same condition."),
+        ("**MeSH Descriptor ID**",
+         "A code starting with `D` followed by digits, e.g. `D010024`. "
+         "Each one points to one medical concept in the MeSH vocabulary."),
+        ("**Tree code (MeSH)**",
+         "A hierarchical address like `C05.116.198.579` that tells you "
+         "where a MeSH concept sits in the medical taxonomy. The first "
+         "letter identifies the branch (C = diseases). We use these to "
+         "map MeSH codes to SNIH areas."),
+        ("**Crosswalk**",
+         "A frozen lookup table that says 'this MeSH branch belongs to "
+         "this SNIH disease area'. Lives at "
+         "`scripts/mesh_snih_crosswalk.json`."),
+        ("**NER (Named-Entity Recognition)**",
+         "A technique that scans text and pulls out specific things — "
+         "in our case, disease names. SciSpacy is the NER tool we use."),
+        ("**NLP (Natural Language Processing)**",
+         "The general field of teaching computers to read text. NER is "
+         "one type of NLP task."),
+        ("**SciSpacy**",
+         "An open-source biomedical NLP library by Allen AI. The "
+         "primary classifier here uses its `en_ner_bc5cdr_md` model — "
+         "trained on biomedical literature to find disease and "
+         "chemical mentions."),
+        ("**PubTator**",
+         "An NLM service that annotates biomedical text with disease, "
+         "chemical, gene, and species mentions. Available as a backend "
+         "but not currently active."),
+        ("**MetaMapLite**",
+         "Another NLM tool for mapping text to medical concepts. "
+         "Highest accuracy of the three NLP options. Requires a free "
+         "UMLS account, so it's available but not active."),
+        ("**Deterministic**",
+         "Same input always gives the same output. The NLP method is "
+         "deterministic; the AI method is not."),
+        ("**OSDR**",
+         "NASA's Open Science Data Repository — `osdr.nasa.gov`. The "
+         "source for all 3,829 ISS experiments in this dashboard."),
+        ("**NCT ID**",
+         "ClinicalTrials.gov's unique identifier for each trial, "
+         "format `NCTxxxxxxxx`. Click the trial URL on the Trials tab "
+         "to open the full record."),
+        ("**TF-IDF**",
+         "*Term Frequency × Inverse Document Frequency.* A standard "
+         "way to measure how similar two pieces of text are by counting "
+         "shared meaningful words (and downweighting common words). "
+         "Used to score the text similarity between trials and "
+         "experiments."),
+        ("**Cosine similarity**",
+         "A number from 0 to 1 that says how similar two text vectors "
+         "are. 1.0 = identical, 0 = no overlap. For scientific text, "
+         "0.15+ is meaningful."),
+        ("**Health-related**",
+         "An experiment that the classification method judged to be "
+         "relevant to at least one SNIH disease area."),
+        ("**Disease area**",
+         "One of the 10 SNIH priority areas: Cardiovascular, Kidney, "
+         "Cancer, Neurological, Eye, Rare inherited disorders, "
+         "Women's health, Endocrine and metabolic, Musculoskeletal, "
+         "Mental health."),
+        ("**Classification source**",
+         "Which method tagged a given experiment. `scispacy` = NLP, "
+         "`ai` = Claude, `keyword` = simple keyword matching."),
+        ("**Tier 1 — Confirmed**",
+         "Both NLP and AI agree the experiment is health-related "
+         "**and** they agree on at least one disease area. Highest "
+         "confidence."),
+        ("**Tier 2 — Probable**",
+         "AI says health-related with high confidence (≥ 0.7), but "
+         "NLP found no literal disease term. Plausible but not "
+         "MeSH-backed."),
+        ("**Tier 3 — Uncertain**",
+         "AI says health-related with low confidence (< 0.7), and NLP "
+         "didn't fire. Treat with care — needs expert review."),
+        ("**Tier 0 — Not health**",
+         "Neither method tagged it as health-related. Mostly basic "
+         "science (plant biology, materials, fluid physics)."),
+        ("**Link strength**",
+         "How confident the trial↔experiment connection is. **Strong** "
+         "= shared MeSH code + high text similarity. **Moderate** = "
+         "shared MeSH with moderate similarity. **Weak** = shared "
+         "disease area only."),
+        ("**Translational pipeline**",
+         "The path from a basic-science experiment, through "
+         "publications, to a clinical trial, to an approved treatment. "
+         "Each step is harder to reach. The dashboard tracks how many "
+         "experiments make it to each step."),
+        ("**F1 score**",
+         "A common accuracy measure for classifiers, combining "
+         "precision and recall into one number from 0 to 1. The "
+         "SciSpacy `en_ner_bc5cdr_md` model has an F1 of 0.84 on the "
+         "BC5CDR disease-chemical benchmark."),
+    ]
+    for term, defn in glossary:
+        st.markdown(f"- {term} — {defn}")
+
+    st.divider()
+
+    # ---- FAQ ----
+    st.markdown("## Frequently asked questions")
+
+    with st.expander("Why are only ~11% of experiments classified as health-related?"):
+        st.markdown(
+            "Because the NLP method only fires when it finds a literal "
+            "disease term in the experiment text. A study about "
+            "'mechanical loading on bone tissue' is clearly "
+            "musculoskeletal to a human reader — but if the title "
+            "doesn't say 'osteoporosis' or 'fracture', NLP stays silent. "
+            "This is intentional: it keeps the method precise and "
+            "citable. The AI Extended view will show a much higher "
+            "percentage (~52%) because it can infer from context."
+        )
+
+    with st.expander("Why do NLP and AI disagree so much?"):
+        st.markdown(
+            "Because they ask different questions. NLP asks: *Did the "
+            "researcher write down a disease name?* AI asks: *Does this "
+            "study sound disease-relevant?* Both are valid; they just "
+            "have different precision/coverage trade-offs. The "
+            "Classification Comparison tab shows you exactly where "
+            "they disagree, by experiment."
+        )
+
+    with st.expander("What does 'Tier 2 Probable' mean?"):
+        st.markdown(
+            "It means the AI is fairly sure (≥ 70%) that the experiment "
+            "is health-related, but the NLP method found no MeSH "
+            "disease code in the text. So the AI inferred relevance "
+            "from context — for example, recognising that 'osteoblast "
+            "differentiation' relates to bone disease even though no "
+            "disease was explicitly named. Plausible, but not "
+            "evidence-backed by the medical dictionary."
+        )
+
+    with st.expander("Why do some trials have no linked experiments?"):
+        st.markdown(
+            "Because many trials we fetched are about conditions that "
+            "ISS hasn't studied — for example, very specific clinical "
+            "cohorts, rare diseases, or trauma-setting studies. "
+            "Roughly 21% of trials have at least one experiment link. "
+            "The other 79% are legitimately disconnected from the ISS "
+            "experiment catalog. This is a coverage ceiling, not a bug."
+        )
+
+    with st.expander("Can I trust the AI classification?"):
+        st.markdown(
+            "**For exploration:** yes. Use AI Extended in the sidebar "
+            "to see broader patterns and catch experiments NLP missed.\n\n"
+            "**For publication or formal reporting:** use NLP/MeSH "
+            "(Tier 1 only). Every Tier 1 classification has a "
+            "traceable MeSH code and is reproducible. Tier 2 and 3 "
+            "are AI-only and shouldn't be cited as confirmed evidence."
+        )
+
+    with st.expander("How often is the data updated?"):
+        st.markdown(
+            "The data here is a snapshot. To refresh it, re-run the "
+            "pipeline scripts in `scripts/` (`01_fetch_nasa_osdr.py` "
+            "→ `13_build_tiered_classification.py`). Each script is "
+            "safe to re-run and will pick up new data from the source "
+            "APIs."
+        )
+
+    with st.expander("What does a 'strong' link mean?"):
+        st.markdown(
+            "A strong link means the trial and the experiment share "
+            "the **exact same MeSH disease code** (e.g. both about "
+            "'Osteoporosis' D010024) AND their descriptions have high "
+            "text similarity. These are the most confident "
+            "bench-to-bedside connections in the dataset."
         )
