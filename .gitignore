@@ -36,6 +36,9 @@ ENV/
 data/raw/
 data/checkpoints/
 
+# --- MetaMapLite index + MeSH tree (big files, separately licensed) ---
+data/metamaplite/
+
 # --- Editor / OS ---
 .vscode/
 .idea/
