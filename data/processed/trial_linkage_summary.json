@@ -1,0 +1,67 @@
+{
+  "total_trials": 534,
+  "trials_with_links": 113,
+  "total_experiments": 3829,
+  "health_related_experiments": 432,
+  "experiments_with_links": 252,
+  "total_links": 1485,
+  "links_by_strength": {
+    "moderate": 713,
+    "strong": 589,
+    "weak": 183
+  },
+  "links_per_trial_avg": 2.781,
+  "links_per_experiment_avg": 3.438,
+  "coverage_by_area": {
+    "Cardiovascular diseases": {
+      "links": 184,
+      "trials": 42,
+      "experiments": 50
+    },
+    "Kidney diseases": {
+      "links": 4,
+      "trials": 4,
+      "experiments": 2
+    },
+    "Cancer": {
+      "links": 599,
+      "trials": 35,
+      "experiments": 72
+    },
+    "Neurological diseases": {
+      "links": 749,
+      "trials": 52,
+      "experiments": 117
+    },
+    "Eye diseases": {
+      "links": 16,
+      "trials": 9,
+      "experiments": 10
+    },
+    "Rare inherited disorders": {
+      "links": 26,
+      "trials": 8,
+      "experiments": 16
+    },
+    "Women's health": {
+      "links": 29,
+      "trials": 14,
+      "experiments": 9
+    },
+    "Endocrine and metabolic diseases": {
+      "links": 66,
+      "trials": 16,
+      "experiments": 22
+    },
+    "Musculoskeletal diseases": {
+      "links": 237,
+      "trials": 28,
+      "experiments": 75
+    },
+    "Mental health": {
+      "links": 42,
+      "trials": 29,
+      "experiments": 12
+    }
+  }
+}

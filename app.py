@@ -68,6 +68,7 @@ def load_all() -> dict[str, pd.DataFrame]:
     trials = data_loader.load_clinical_trials()
     pubs = data_loader.load_publication_counts()
     therapies = data_loader.load_approved_therapies()
+    links = data_loader.load_trial_experiment_links()
 
     return {
         "classified_nlp": nlp,
@@ -75,7 +76,13 @@ def load_all() -> dict[str, pd.DataFrame]:
         "trials": trials,
         "pubs": pubs,
         "therapies": therapies,
+        "links": links,
     }
+
+
+@st.cache_data(show_spinner=False)
+def load_link_summary() -> dict:
+    return data_loader.load_trial_linkage_summary()
 
 
 @st.cache_data(show_spinner=False)
@@ -89,6 +96,8 @@ classified_ai_df: pd.DataFrame = data["classified_ai"]
 trials_df: pd.DataFrame = data["trials"]
 pubs_df: pd.DataFrame = data["pubs"]
 therapies_df: pd.DataFrame = data["therapies"]
+links_df: pd.DataFrame = data["links"]
+link_summary: dict = load_link_summary()
 
 class_config = load_class_config()
 active_nlp_backend = class_config.get("backend", "scispacy")
@@ -226,6 +235,7 @@ TAB_LABELS = [
     "Experiment Explorer",
     "Translational Pipeline",
     "Clinical Trials",
+    "Trial-Experiment Links",
     "Approved Therapies",
     "Gap Analysis",
     "Disease Deep-Dive",
@@ -562,8 +572,136 @@ with tabs[3]:
         )
 
 
-# --- Tab 5: Approved Therapies & Devices (stub) ---------------------------
+# --- Tab 5: Trial-Experiment Links (spec 04) -------------------------------
 with tabs[4]:
+    st.subheader("Trial-Experiment Links")
+    if links_df.empty:
+        empty_state(
+            "No trial-experiment linkage yet.",
+            "12_link_trials_experiments.py",
+        )
+    else:
+        total_links = int(link_summary.get("total_links", len(links_df)))
+        trials_linked = int(link_summary.get("trials_with_links", 0))
+        exp_linked = int(link_summary.get("experiments_with_links", 0))
+        total_trials_n = int(link_summary.get("total_trials", len(trials_df)))
+        by_strength = link_summary.get("links_by_strength", {})
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total links", f"{total_links:,}")
+        m2.metric(
+            "Trials linked",
+            f"{trials_linked:,}",
+            delta=f"{(trials_linked/total_trials_n*100):.0f}%" if total_trials_n else None,
+        )
+        m3.metric("Experiments linked", f"{exp_linked:,}")
+        m4.metric("Strong links", f"{int(by_strength.get('strong', 0)):,}")
+
+        st.caption(
+            "Deterministic linkage via SciSpacy MeSH extraction on trials + "
+            "MeSH / disease-area / TF-IDF cosine overlap against the NLP-"
+            "classified experiments. See Sources & Methods for thresholds."
+        )
+
+        # Filters for the table
+        fcol1, fcol2, fcol3 = st.columns([2, 2, 3])
+        with fcol1:
+            strength_pick = st.multiselect(
+                "Link strength",
+                options=["strong", "moderate", "weak"],
+                default=["strong", "moderate"],
+            )
+        with fcol2:
+            linked_area_pick = st.multiselect(
+                "Disease area",
+                options=DISEASE_AREA_NAMES,
+                default=[],
+                help="Matches experiments whose shared area overlaps one of these.",
+            )
+        with fcol3:
+            link_search = st.text_input(
+                "Search trial / experiment title", placeholder="pain, thrombosis, NCT..."
+            )
+
+        view_links = links_df.copy()
+        if strength_pick:
+            view_links = view_links[view_links["link_strength"].isin(strength_pick)]
+        if linked_area_pick:
+            pat = "|".join(pd.io.common.re.escape(a) for a in linked_area_pick)  # type: ignore
+            view_links = view_links[
+                view_links["shared_areas"].fillna("").str.contains(pat, regex=True)
+            ]
+        if link_search:
+            s = link_search.strip()
+            mask = (
+                view_links["trial_title"].fillna("").str.contains(s, case=False, regex=False)
+                | view_links["experiment_title"].fillna("").str.contains(s, case=False, regex=False)
+                | view_links["nct_id"].fillna("").str.contains(s, case=False, regex=False)
+                | view_links["osID"].fillna("").str.contains(s, case=False, regex=False)
+            )
+            view_links = view_links[mask]
+
+        st.caption(f"Showing **{len(view_links):,}** of {len(links_df):,} links.")
+
+        # Attach clickable URLs
+        trial_url_map = dict(zip(trials_df["nct_id"].astype(str), trials_df.get("url", "")))
+        exp_url_map = dict(
+            zip(classified_df["osID"].astype(str), classified_df.get("source_url", ""))
+            if "source_url" in classified_df.columns
+            else []
+        )
+        display_links = view_links.copy()
+        display_links["trial_url"] = display_links["nct_id"].map(trial_url_map).fillna("")
+        display_links["experiment_url"] = display_links["osID"].map(exp_url_map).fillna("")
+
+        st.dataframe(
+            display_links[
+                [
+                    "link_strength",
+                    "final_score",
+                    "nct_id",
+                    "trial_title",
+                    "trial_url",
+                    "osID",
+                    "experiment_title",
+                    "experiment_url",
+                    "shared_areas",
+                    "shared_mesh_ids",
+                    "mesh_score",
+                    "area_score",
+                    "cosine_score",
+                ]
+            ],
+            width="stretch",
+            height=520,
+            hide_index=True,
+            column_config={
+                "link_strength": st.column_config.TextColumn("Strength", width="small"),
+                "final_score": st.column_config.NumberColumn("Score", format="%.2f", width="small"),
+                "nct_id": st.column_config.TextColumn("NCT ID", width="small"),
+                "trial_title": st.column_config.TextColumn("Trial", width="large"),
+                "trial_url": st.column_config.LinkColumn("Trial link", display_text="open"),
+                "osID": st.column_config.TextColumn("OS ID", width="small"),
+                "experiment_title": st.column_config.TextColumn("Experiment", width="large"),
+                "experiment_url": st.column_config.LinkColumn("Experiment link", display_text="open"),
+                "shared_areas": st.column_config.TextColumn("Shared areas", width="medium"),
+                "shared_mesh_ids": st.column_config.TextColumn("Shared MeSH", width="small"),
+                "mesh_score": st.column_config.NumberColumn("MeSH", format="%.2f", width="small"),
+                "area_score": st.column_config.NumberColumn("Area", format="%.2f", width="small"),
+                "cosine_score": st.column_config.NumberColumn("Text", format="%.2f", width="small"),
+            },
+        )
+
+        st.download_button(
+            "Download filtered links CSV",
+            data=view_links.to_csv(index=False).encode("utf-8"),
+            file_name="trial_experiment_links_filtered.csv",
+            mime="text/csv",
+        )
+
+
+# --- Tab 6: Approved Therapies & Devices (stub) ---------------------------
+with tabs[5]:
     st.subheader("Approved Therapies & Devices")
     if therapies_df.empty:
         empty_state("No therapies data yet.", "08_research_therapies.py")
@@ -571,8 +709,8 @@ with tabs[4]:
         st.dataframe(therapies_df, width="stretch")
 
 
-# --- Tab 6: Gap Analysis --------------------------------------------------
-with tabs[5]:
+# --- Tab 7: Gap Analysis --------------------------------------------------
+with tabs[6]:
     st.subheader("Gap Analysis")
     if classified_df.empty or trials_df.empty or pubs_per_area.empty:
         empty_state(
@@ -668,8 +806,8 @@ with tabs[5]:
                 st.write(f"- {area} — {trials} trials / {exp} exp ({ratio:.2f})")
 
 
-# --- Tab 7: Disease Deep-Dive (stub) ---------------------------------------
-with tabs[6]:
+# --- Tab 8: Disease Deep-Dive ---------------------------------------------
+with tabs[7]:
     st.subheader("Disease Deep-Dive")
     pick = st.selectbox("Select a disease area", DISEASE_AREA_NAMES)
     st.caption(
@@ -680,16 +818,58 @@ with tabs[6]:
         match = classified_df[
             classified_df["disease_areas"].fillna("").str.contains(pick, case=False)
         ]
-        st.write(f"{len(match)} experiments classified to **{pick}**")
+
+        # Per-area linkage counts (spec 04 section 7.2)
+        area_links = (
+            links_df[links_df["shared_areas"].fillna("").str.contains(pick, regex=False)]
+            if not links_df.empty else pd.DataFrame()
+        )
+        linked_trials_count = int(area_links["nct_id"].nunique()) if not area_links.empty else 0
+        linked_exp_count = int(area_links["osID"].nunique()) if not area_links.empty else 0
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Experiments in area", f"{len(match):,}")
+        m2.metric("Linked trials", f"{linked_trials_count:,}")
+        m3.metric("Linked experiments", f"{linked_exp_count:,}")
+
         st.dataframe(
             match[["osID", "title", "primary_disease_area", "relevance_type"]].head(50),
             width="stretch",
             hide_index=True,
         )
 
+        # Top 5 strongest links for this area (spec 04 section 7.2)
+        if not area_links.empty:
+            st.markdown("**Top 5 strongest trial ↔ experiment links**")
+            top_area_links = area_links.head(5)
+            st.dataframe(
+                top_area_links[
+                    [
+                        "link_strength",
+                        "final_score",
+                        "nct_id",
+                        "trial_title",
+                        "osID",
+                        "experiment_title",
+                        "shared_mesh_ids",
+                    ]
+                ],
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "link_strength": st.column_config.TextColumn("Strength", width="small"),
+                    "final_score": st.column_config.NumberColumn("Score", format="%.2f", width="small"),
+                    "nct_id": st.column_config.TextColumn("NCT ID", width="small"),
+                    "trial_title": st.column_config.TextColumn("Trial", width="large"),
+                    "osID": st.column_config.TextColumn("OS ID", width="small"),
+                    "experiment_title": st.column_config.TextColumn("Experiment", width="large"),
+                    "shared_mesh_ids": st.column_config.TextColumn("Shared MeSH"),
+                },
+            )
 
-# --- Tab 8: Sources & Methods (stub) --------------------------------------
-with tabs[7]:
+
+# --- Tab 9: Sources & Methods ---------------------------------------------
+with tabs[8]:
     st.subheader("Sources & Methods")
     osdr_count = int(classified_df["osID"].astype(str).str.startswith("OS-").sum()) \
         if not classified_df.empty else 0
@@ -733,3 +913,42 @@ with tabs[7]:
         "methods is reported in "
         "`data/processed/classification_comparison.csv`."
     )
+
+    st.markdown("**Trial ↔ experiment linkage methodology**")
+    st.markdown(
+        "Clinical trials are linked to ISS experiments deterministically "
+        "(no AI, no randomness) using three independent signals combined "
+        "into a single score:"
+    )
+    st.markdown(
+        "- **MeSH descriptor overlap** — SciSpacy runs on the trial's "
+        "title + conditions to extract MeSH Descriptor IDs, which are "
+        "compared to each experiment's `mesh_evidence` column from the "
+        "NLP classification. `mesh_score = |intersection| / min(|trial|, |exp|)`.\n"
+        "- **SNIH disease-area overlap** — `area_score = |intersection| / |trial areas|`. "
+        "Also used as a pre-filter to keep the candidate space small.\n"
+        "- **TF-IDF cosine similarity** — unigram+bigram over trial text "
+        "(title+conditions+interventions) vs experiment text "
+        "(title+objectives+approach+results), English stopwords, min_df=2."
+    )
+    st.markdown(
+        "`final_score = 0.5·mesh + 0.2·area + 0.3·cosine`. A pair is linked "
+        "only if `final_score ≥ 0.3` **and** (`mesh_score ≥ 0.5` or "
+        "`cosine_score ≥ 0.15`). Strength labels: `strong ≥ 0.6`, "
+        "`moderate ≥ 0.4`, `weak ≥ 0.3`."
+    )
+    if link_summary:
+        trials_linked_n = int(link_summary.get("trials_with_links", 0))
+        total_trials_n = int(link_summary.get("total_trials", 0))
+        coverage_pct = (trials_linked_n / total_trials_n * 100) if total_trials_n else 0.0
+        st.caption(
+            f"**Coverage finding:** {trials_linked_n:,} of {total_trials_n:,} "
+            f"trials ({coverage_pct:.1f}%) have at least one experiment link. "
+            f"The remaining trials are about conditions with no direct "
+            f"counterpart in the ISS experiment catalog (e.g. specific "
+            f"clinical cohorts, rare diseases, or trauma-setting studies). "
+            f"This is the honest ceiling of deterministic matching on this "
+            f"dataset — loosening thresholds would trade precision for "
+            f"coverage. See `data/processed/trial_experiment_links.csv` and "
+            f"`data/processed/trial_linkage_summary.json`."
+        )

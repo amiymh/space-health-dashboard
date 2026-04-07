@@ -77,6 +77,22 @@ def load_clinical_trials() -> pd.DataFrame:
     return _safe_read("clinical_trials.csv")
 
 
+def load_trial_experiment_links() -> pd.DataFrame:
+    """Trial <-> experiment linkage produced by Spec 04 (script 12)."""
+    return _safe_read("trial_experiment_links.csv")
+
+
+def load_trial_linkage_summary() -> dict:
+    """Summary JSON produced alongside trial_experiment_links.csv."""
+    path = PROCESSED_DIR / "trial_linkage_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
 def load_publication_counts() -> pd.DataFrame:
     return _safe_read("publication_counts.csv")
 
