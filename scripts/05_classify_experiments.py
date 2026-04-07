@@ -69,6 +69,10 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # deprecated on OpenRouter (2026-04). Substituting Sonnet 4.5 — closest
 # equivalent for classification accuracy, similar pricing tier.
 MODEL = "anthropic/claude-sonnet-4.5"
+# Sonnet 4.5's content moderation blocks a small number of microbiology
+# titles (pathogen names like "Burkholderia", "Mycobacteria"). Haiku 4.5
+# answers them cleanly, so it's our final-tier fallback.
+FALLBACK_MODEL = "anthropic/claude-haiku-4.5"
 AI_RATE_LIMIT_SEC = 1.0
 CHECKPOINT_EVERY = 50
 
@@ -168,18 +172,20 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
-def ai_classify(
+def _post_classification(
     session: requests.Session,
     api_key: str,
     title: str,
     description: str,
-) -> dict[str, Any]:
+    model: str = MODEL,
+) -> str | None:
+    """One round-trip to OpenRouter. Returns content string or None."""
     prompt = PROMPT_TEMPLATE.format(
         title=title or "(no title)",
         description=(description or "(no description)")[:4000],
     )
     payload = {
-        "model": MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1200,
         "temperature": 0.0,
@@ -190,11 +196,46 @@ def ai_classify(
         "HTTP-Referer": "https://github.com/amiymh/space-health-dashboard",
         "X-Title": "Space-Health Dashboard",
     }
-
     resp = session.post(OPENROUTER_URL, json=payload, headers=headers, timeout=120)
     resp.raise_for_status()
     body = resp.json()
-    content = body["choices"][0]["message"]["content"]
+    msg = body["choices"][0]["message"]
+    content = msg.get("content")
+    if content:
+        return content
+    # Some providers stash JSON in the reasoning trace
+    reasoning = msg.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        return reasoning
+    return None
+
+
+def ai_classify(
+    session: requests.Session,
+    api_key: str,
+    title: str,
+    description: str,
+) -> dict[str, Any]:
+    # Tier 1: Sonnet 4.5 with full description
+    content = _post_classification(session, api_key, title, description)
+
+    # Tier 2: Sonnet 4.5 with title only (long descriptions trip moderation
+    # on pathogen names like "M. marinum", "virulence")
+    if not content:
+        time.sleep(1.5)
+        content = _post_classification(session, api_key, title, description="")
+
+    # Tier 3: Haiku 4.5 with title only (Sonnet 4.5's moderation also
+    # blocks some pathogen-bearing titles outright; Haiku is permissive)
+    if not content:
+        time.sleep(1.5)
+        content = _post_classification(
+            session, api_key, title, description="", model=FALLBACK_MODEL
+        )
+
+    if not content:
+        raise RuntimeError("AI returned empty content after Sonnet+title+Haiku fallbacks")
+
     cleaned = _strip_fences(content)
     try:
         parsed = json.loads(cleaned)
