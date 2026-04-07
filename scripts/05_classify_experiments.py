@@ -438,13 +438,19 @@ def main() -> None:
         approach = str(row.get("approach") or "").strip()
         results_text = str(row.get("results") or "").strip()
         research_areas = str(row.get("researchAreas") or "").strip()
+        publication_titles = str(row.get("publication_titles") or "").strip()
 
         description_parts = [objectives, approach, results_text]
         description = " ".join(p for p in description_parts if p)
 
         # Keyword matching uses everything we have, including researchAreas
         # tagged by NASA themselves (often more useful than the title alone)
-        keyword_text = " ".join(p for p in [title, description, research_areas] if p)
+        # and the titles of any publications linked to the experiment — that
+        # last field is critical for SSRE rows, which carry no objectives/
+        # approach/results but often have rich publication titles.
+        keyword_text = " ".join(
+            p for p in [title, description, research_areas, publication_titles] if p
+        )
         keyword_matches = keyword_classify(keyword_text, patterns)
 
         # Fix 2 — short-title-no-context routing

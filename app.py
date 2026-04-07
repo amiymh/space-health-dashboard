@@ -146,8 +146,8 @@ with st.sidebar:
     show_only_health = st.checkbox(
         "Health-related experiments only",
         value=True,
-        help="Hide the 29 experiments classified as plant biology, materials, "
-             "or technology.",
+        help="Hide experiments classified as plant biology, materials, "
+             "physical science, technology, or education.",
     )
     st.divider()
     st.caption("Pipeline status")
@@ -263,7 +263,7 @@ with tabs[0]:
                 .rename_axis("category")
                 .reset_index(name="count")
             )
-            st.markdown("**Top non-health categories** (29 experiments)")
+            st.markdown(f"**Top non-health categories** ({len(non_health):,} experiments)")
             fig_cat = px.bar(
                 cat_counts,
                 x="count",
@@ -640,17 +640,25 @@ with tabs[6]:
 # --- Tab 8: Sources & Methods (stub) --------------------------------------
 with tabs[7]:
     st.subheader("Sources & Methods")
+    osdr_count = int(classified_df["osID"].astype(str).str.startswith("OS-").sum()) \
+        if not classified_df.empty else 0
+    ssre_count = int(classified_df["osID"].astype(str).str.startswith("SSRE-").sum()) \
+        if not classified_df.empty else 0
     st.markdown(
-        """
-        | Source | URL |
-        |---|---|
-        | NASA OSDR | https://osdr.nasa.gov |
-        | NASA Research Explorer | https://www.nasa.gov/mission/station/research-explorer/ |
-        | ESA Erasmus Experiment Archive | https://eea.spaceflight.esa.int |
-        | JAXA Space Experiment Database | https://humans-in-space.jaxa.jp/en/bss/experiment/ |
-        | CSA Experiments | https://www.asc-csa.gc.ca/eng/sciences/experiments/ |
-        | ClinicalTrials.gov | https://clinicaltrials.gov/api/v2/studies |
-        | PubMed E-utilities | https://eutils.ncbi.nlm.nih.gov/entrez/eutils/ |
+        f"""
+        **Experiment catalog** ({len(classified_df):,} total):
+        {osdr_count:,} from NASA OSDR (omics-focused datasets, aim-level)
+        + {ssre_count:,} from NASA Space Station Research Explorer
+        (SSRE — full ISS investigation catalog across NASA, ESA, JAXA,
+        ROSCOSMOS, and CSA).
+
+        | Source | URL | Used for |
+        |---|---|---|
+        | NASA OSDR | https://osdr.nasa.gov | Omics datasets (aim-level) |
+        | NASA SSRE — All Experiments Report | https://www.nasa.gov/mission/station/research-explorer/ | Full ISS investigation catalog (all 5 partner agencies) |
+        | NASA SSRE — All Publications Report | https://www.nasa.gov/mission/station/research-explorer/ | Publication titles linked to each SSRE investigation |
+        | ClinicalTrials.gov | https://clinicaltrials.gov/api/v2/studies | Trials filtered by space keywords |
+        | PubMed E-utilities | https://eutils.ncbi.nlm.nih.gov/entrez/eutils/ | Per-disease publication counts |
         """
     )
     st.caption(
