@@ -5,17 +5,18 @@ Reads CSVs out of data/processed/ and exposes them to app.py with
 @st.cache_data so re-renders are cheap. Returns empty DataFrames when a
 particular file does not exist yet, so the dashboard renders even with a
 partial pipeline run.
-
-Status: STUB — implement once Phase 1 outputs are stable.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
 
-PROCESSED_DIR = Path(__file__).resolve().parent.parent / "data" / "processed"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 def _safe_read(name: str) -> pd.DataFrame:
@@ -37,7 +38,39 @@ def load_all_experiments() -> pd.DataFrame:
 
 
 def load_classified_experiments() -> pd.DataFrame:
+    """Primary classification: NLP/MeSH (spec 03). Falls back to AI if missing."""
+    nlp = _safe_read("classified_experiments_nlp.csv")
+    if not nlp.empty:
+        return nlp
     return _safe_read("classified_experiments.csv")
+
+
+def load_classified_experiments_nlp() -> pd.DataFrame:
+    """Deterministic NLP classification (scispacy/pubtator/metamaplite)."""
+    return _safe_read("classified_experiments_nlp.csv")
+
+
+def load_classified_experiments_ai() -> pd.DataFrame:
+    """Legacy AI classification (Claude via OpenRouter). Comparison layer only."""
+    return _safe_read("classified_experiments.csv")
+
+
+def load_classification_comparison() -> pd.DataFrame:
+    return _safe_read("classification_comparison.csv")
+
+
+def load_classification_config() -> dict:
+    """
+    Return the NLP classifier configuration (config/classification_config.json).
+    Empty dict if the file is missing.
+    """
+    path = CONFIG_DIR / "classification_config.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
 
 
 def load_clinical_trials() -> pd.DataFrame:

@@ -43,39 +43,63 @@ st.caption(
 # ---------------------------------------------------------------------------
 # Data loading + normalisation
 # ---------------------------------------------------------------------------
+def _normalise_classified(classified: pd.DataFrame) -> pd.DataFrame:
+    if classified.empty:
+        return classified
+    classified = classified.copy()
+    # CSV stores booleans as the strings "True"/"False"
+    classified["health_related"] = (
+        classified["health_related"]
+        .astype(str)
+        .str.lower()
+        .map({"true": True, "false": False})
+        .fillna(False)
+    )
+    for col in ("disease_areas", "primary_disease_area", "non_health_category"):
+        if col in classified.columns:
+            classified[col] = classified[col].fillna("")
+    return classified
+
+
 @st.cache_data(show_spinner=False)
 def load_all() -> dict[str, pd.DataFrame]:
-    classified = data_loader.load_classified_experiments()
+    nlp = _normalise_classified(data_loader.load_classified_experiments_nlp())
+    ai = _normalise_classified(data_loader.load_classified_experiments_ai())
     trials = data_loader.load_clinical_trials()
     pubs = data_loader.load_publication_counts()
     therapies = data_loader.load_approved_therapies()
 
-    if not classified.empty:
-        # CSV stores booleans as the strings "True"/"False"
-        classified["health_related"] = (
-            classified["health_related"]
-            .astype(str)
-            .str.lower()
-            .map({"true": True, "false": False})
-            .fillna(False)
-        )
-        classified["disease_areas"] = classified["disease_areas"].fillna("")
-        classified["primary_disease_area"] = classified["primary_disease_area"].fillna("")
-        classified["non_health_category"] = classified["non_health_category"].fillna("")
-
     return {
-        "classified": classified,
+        "classified_nlp": nlp,
+        "classified_ai": ai,
         "trials": trials,
         "pubs": pubs,
         "therapies": therapies,
     }
 
 
+@st.cache_data(show_spinner=False)
+def load_class_config() -> dict:
+    return data_loader.load_classification_config()
+
+
 data = load_all()
-classified_df: pd.DataFrame = data["classified"]
+classified_nlp_df: pd.DataFrame = data["classified_nlp"]
+classified_ai_df: pd.DataFrame = data["classified_ai"]
 trials_df: pd.DataFrame = data["trials"]
 pubs_df: pd.DataFrame = data["pubs"]
 therapies_df: pd.DataFrame = data["therapies"]
+
+class_config = load_class_config()
+active_nlp_backend = class_config.get("backend", "scispacy")
+
+# Friendly label per spec section 9.4
+BACKEND_BADGES = {
+    "scispacy": "SciSpacy en_ner_bc5cdr_md + MeSH Entity Linker",
+    "pubtator": "PubTator Central API",
+    "metamaplite": "NLM MetaMapLite with UMLS 2024AA",
+}
+active_backend_label = BACKEND_BADGES.get(active_nlp_backend, active_nlp_backend)
 
 
 # Strip the baseline row for per-disease views
@@ -135,6 +159,28 @@ def empty_state(message: str, script: str) -> None:
 # Sidebar filters
 # ---------------------------------------------------------------------------
 with st.sidebar:
+    st.header("Classification")
+    method_options = ["NLP / MeSH (default)", "AI Extended"]
+    if classified_nlp_df.empty:
+        # NLP file missing — fall back to AI so the dashboard still renders
+        method_options = ["AI Extended"]
+    method = st.radio(
+        "Method",
+        options=method_options,
+        index=0,
+        help=(
+            "NLP / MeSH is deterministic biomedical NER + MeSH tree mapping "
+            "(the primary method). AI Extended is the legacy Claude-based "
+            "classification — kept for comparison."
+        ),
+    )
+    use_nlp = method.startswith("NLP")
+    if use_nlp:
+        st.caption(f"Classified by: **{active_backend_label}**")
+    else:
+        st.caption("Classified by: **Claude Sonnet 4.5** (OpenRouter, temperature=0)")
+
+    st.divider()
     st.header("Filters")
     selected_diseases: list[str] = st.multiselect(
         "Disease area",
@@ -151,10 +197,15 @@ with st.sidebar:
     )
     st.divider()
     st.caption("Pipeline status")
-    st.write(f"Classified experiments: **{len(classified_df)}**")
+    active_count = len(classified_nlp_df if use_nlp else classified_ai_df)
+    st.write(f"Classified experiments: **{active_count}**")
     st.write(f"Clinical trials: **{len(trials_df)}**")
     st.write(f"PubMed counts: **{len(pubs_df)}**")
     st.write(f"Therapies: **{len(therapies_df)}**")
+
+
+# Bind the active classification dataset AFTER the sidebar has chosen.
+classified_df: pd.DataFrame = classified_nlp_df if use_nlp else classified_ai_df
 
 
 # Apply filters once for re-use across tabs
@@ -661,9 +712,24 @@ with tabs[7]:
         | PubMed E-utilities | https://eutils.ncbi.nlm.nih.gov/entrez/eutils/ | Per-disease publication counts |
         """
     )
+    st.markdown("**Classification methodology**")
+    st.markdown(
+        "Experiments are classified against SNIH disease areas using "
+        "biomedical named-entity recognition with MeSH concept mapping. "
+        "Disease entities are extracted from experiment text, linked to "
+        "MeSH Descriptor IDs, and mapped to SNIH disease areas via MeSH "
+        "tree codes (C-branch, plus F03 for mental health) using a frozen "
+        "crosswalk. This method is fully deterministic and reproducible "
+        "(same inputs always produce the same outputs) and leaves an "
+        "audit trail of the exact MeSH descriptors that drove each "
+        "classification (see the `mesh_evidence` column and "
+        "`data/processed/nlp_classification_details.json`)."
+    )
+    st.markdown(f"**Current backend:** {active_backend_label}")
     st.caption(
-        "Classification methodology: keyword matching against the SNIH "
-        "disease keyword lists in scripts/config.py, with Claude (via "
-        "OpenRouter) as a fallback for experiments where keywords found "
-        "no match. See SPACE_HEALTH_SPECS.md section 3.3."
+        "An alternative AI-based classification (Claude Sonnet 4.5 via "
+        "OpenRouter, temperature=0.0) is available for comparison via the "
+        "sidebar *Classification method* toggle. Agreement between the two "
+        "methods is reported in "
+        "`data/processed/classification_comparison.csv`."
     )

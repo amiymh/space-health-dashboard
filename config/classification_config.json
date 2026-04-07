@@ -1,0 +1,19 @@
+{
+  "backend": "scispacy",
+  "scispacy": {
+    "model": "en_ner_bc5cdr_md",
+    "linker": "mesh",
+    "min_entity_score": 0.7
+  },
+  "pubtator": {
+    "api_url": "https://www.ncbi.nlm.nih.gov/research/pubtator3-api/annotate/",
+    "requests_per_second": 3
+  },
+  "metamaplite": {
+    "ivf_dir": "data/metamaplite/ivf/2024AA/USAbase",
+    "use_cache": true
+  },
+  "mesh_tree_lookup": "scripts/mesh_tree_lookup.json",
+  "mesh_name_to_descriptor": "scripts/mesh_name_to_descriptor.json",
+  "crosswalk": "scripts/mesh_snih_crosswalk.json"
+}

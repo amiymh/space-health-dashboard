@@ -1,0 +1,62 @@
+{
+  "Cardiovascular diseases": {
+    "mesh_branches": ["C14"],
+    "mesh_name": "Cardiovascular Diseases",
+    "semantic_types": ["dsyn", "patf"],
+    "notes": "Includes heart diseases, vascular diseases, blood pressure disorders"
+  },
+  "Kidney diseases": {
+    "mesh_branches": ["C12.777", "C13.351.968"],
+    "mesh_name": "Urologic Diseases / Kidney Diseases",
+    "semantic_types": ["dsyn"],
+    "notes": "C12.777 = kidney diseases under urologic; C13.351.968 = kidney diseases under female urogenital. Also match descriptors with 'renal' or 'kidney' in preferred name."
+  },
+  "Cancer": {
+    "mesh_branches": ["C04"],
+    "mesh_name": "Neoplasms",
+    "semantic_types": ["neop"],
+    "notes": "All neoplasms. The semantic type 'neop' (Neoplastic Process) is a strong standalone signal."
+  },
+  "Neurological diseases": {
+    "mesh_branches": ["C10"],
+    "mesh_name": "Nervous System Diseases",
+    "semantic_types": ["dsyn"],
+    "notes": "Includes neurodegenerative, cerebrovascular, vestibular. Exclude C10.228.140.490 (headache as standalone)."
+  },
+  "Eye diseases": {
+    "mesh_branches": ["C11"],
+    "mesh_name": "Eye Diseases",
+    "semantic_types": ["dsyn"],
+    "notes": "Includes SANS (spaceflight-associated neuro-ocular syndrome), retinal, corneal, glaucoma."
+  },
+  "Rare inherited disorders": {
+    "mesh_branches": ["C16"],
+    "mesh_name": "Congenital, Hereditary, and Neonatal Diseases and Abnormalities",
+    "semantic_types": ["cgab", "dsyn"],
+    "notes": "C16 covers genetic/congenital. Also match descriptors whose preferred name contains 'hereditary', 'congenital', 'genetic disorder', 'inborn error'."
+  },
+  "Women's health": {
+    "mesh_branches": ["C13"],
+    "mesh_name": "Female Urogenital Diseases and Pregnancy Complications",
+    "semantic_types": ["dsyn", "patf"],
+    "notes": "C13 covers female reproductive, pregnancy, gynecological. Exclude kidney sub-branch (handled above)."
+  },
+  "Endocrine and metabolic diseases": {
+    "mesh_branches": ["C18", "C19"],
+    "mesh_name": "Nutritional and Metabolic Diseases + Endocrine System Diseases",
+    "semantic_types": ["dsyn"],
+    "notes": "C18 = metabolic (diabetes, lipid, obesity). C19 = endocrine (thyroid, adrenal, pituitary). Both map to this single SNIH area."
+  },
+  "Musculoskeletal diseases": {
+    "mesh_branches": ["C05"],
+    "mesh_name": "Musculoskeletal Diseases",
+    "semantic_types": ["dsyn"],
+    "notes": "Includes osteoporosis, sarcopenia, bone diseases, joint diseases, muscular atrophy."
+  },
+  "Mental health": {
+    "mesh_branches": ["F03"],
+    "mesh_name": "Mental Disorders",
+    "semantic_types": ["mobd", "menp"],
+    "notes": "F03 is on the F (Psychiatry and Psychology) branch, not C. 'mobd' = Mental or Behavioral Dysfunction. Also match descriptors for sleep disorders (C10.886 cross-listed to F03)."
+  }
+}
