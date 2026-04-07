@@ -35,8 +35,8 @@ st.set_page_config(
 
 st.title("Space-Health Dashboard")
 st.caption(
-    "Mapping ISS research to SNIH priority disease areas — KFCRIS · "
-    "see SPACE_HEALTH_SPECS.md for the full specification."
+    "Mapping ISS research to SNIH priority disease areas — "
+    "see SPACE_HEALTH_SPECS.md for methodology."
 )
 
 
@@ -493,6 +493,11 @@ with tabs[3]:
             )
             fig_phase.update_traces(textposition="outside")
             st.plotly_chart(fig_phase, width="stretch")
+            st.caption(
+                "Note: 66% of trials show no declared phase. These are "
+                "typically observational or bed rest studies exempt from "
+                "FDA phase classification, not missing data."
+            )
 
         st.markdown("**Trials**")
         st.dataframe(

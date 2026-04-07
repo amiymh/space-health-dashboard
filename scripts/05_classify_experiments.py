@@ -358,6 +358,31 @@ def main() -> None:
     if results:
         print(f"[classify] Resuming — {len(results)} experiments already classified")
 
+    # ------------------------------------------------------------------
+    # Fix 5 — handle missing titles up front. Replace the NaN/empty
+    # title with a placeholder, mark the record as incomplete, and skip
+    # the classification loop entirely. Prevents downstream NaN crashes
+    # and ensures the row still appears in the final CSV.
+    # ------------------------------------------------------------------
+    empty_title_mask = df["title"].astype(str).str.strip() == ""
+    for idx in df.index[empty_title_mask]:
+        osid = str(df.at[idx, "osID"])
+        placeholder = f"[No title — OSDR record {osid}]"
+        df.at[idx, "title"] = placeholder
+        if osid in results:
+            continue
+        results[osid] = {
+            "osID": osid,
+            "health_related": False,
+            "disease_areas_list": [],
+            "primary_disease_area": "",
+            "relevance_type": "",
+            "classification_source": "incomplete",
+            "non_health_category": "incomplete_record",
+            "details": [],
+        }
+        print(f"[classify] {osid}: empty title — marked incomplete_record")
+
     patterns = build_keyword_patterns()
     session = make_session() if api_key else None
 
@@ -380,6 +405,23 @@ def main() -> None:
         # tagged by NASA themselves (often more useful than the title alone)
         keyword_text = " ".join(p for p in [title, description, research_areas] if p)
         keyword_matches = keyword_classify(keyword_text, patterns)
+
+        # Fix 2 — short-title-no-context routing
+        # Titles with fewer than 8 words AND no objectives/approach/results
+        # produce too many keyword false positives (e.g. "STS-106 Flight
+        # Environmental Data" gets tagged Musculoskeletal). Discard the
+        # keyword matches in that case and route to the AI fallback so the
+        # model can refuse to classify if there's truly no signal.
+        title_word_count = len(title.split())
+        no_context = not (objectives or approach or results_text)
+        short_unreliable = title_word_count < 8 and no_context
+        if short_unreliable and keyword_matches:
+            print(
+                f"[classify] Classifying {position}/{total}: {osid} — "
+                f"short title ({title_word_count} words) with no description, "
+                f"discarding keyword matches and routing to AI"
+            )
+            keyword_matches = {}
 
         ai_result: dict[str, Any] | None = None
         if not keyword_matches and api_key and session is not None:

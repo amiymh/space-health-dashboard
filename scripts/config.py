@@ -118,9 +118,15 @@ DISEASE_AREAS: dict[str, dict[str, list[str]]] = {
     },
     "Mental health": {
         "primary": [
-            "psychological", "cognitive", "stress", "anxiety", "depression",
+            "psychological", "cognitive", "anxiety", "depression",
             "sleep", "circadian", "isolation", "behavioral", "mood",
             "fatigue", "psychosocial", "neurobehavioral",
+            # Bare "stress" was removed in 2026-04 — it false-matched
+            # ~15% of musculoskeletal/radiation experiments via "oxidative
+            # stress", "mechanical stress", etc. Replaced with phrases
+            # that only fire on psychological contexts.
+            "psychological stress", "psychosocial stress",
+            "stress response questionnaire", "perceived stress",
         ],
         "expansions": ["confinement", "wellbeing", "mental"],
     },
