@@ -34,6 +34,7 @@ See SPACE_HEALTH_SPECS.md section 3.3.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -379,9 +380,27 @@ def write_outputs(df: pd.DataFrame, results: dict[str, dict[str, Any]]) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--retry-none",
+        action="store_true",
+        help=(
+            "Re-process every row currently tagged 'none' or 'incomplete' "
+            "in the checkpoint. Existing 'keyword' and 'ai' classifications "
+            "are preserved untouched. Requires OPENROUTER_API_KEY — aborts "
+            "if the key is missing."
+        ),
+    )
+    args = parser.parse_args()
+
     load_env()
     api_key = get_env("OPENROUTER_API_KEY")
     if not api_key:
+        if args.retry_none:
+            raise SystemExit(
+                "[classify] FATAL: --retry-none requires OPENROUTER_API_KEY in .env. "
+                "Cannot retry unclassified rows without the AI fallback."
+            )
         print("[classify] WARNING: no OPENROUTER_API_KEY in .env — AI fallback disabled")
 
     if not INPUT_CSV.exists():
@@ -398,6 +417,25 @@ def main() -> None:
     api_calls: int = int(checkpoint.get("api_calls", 0))
     if results:
         print(f"[classify] Resuming — {len(results)} experiments already classified")
+
+    # ------------------------------------------------------------------
+    # --retry-none: drop existing 'none' and 'incomplete' entries from
+    # the results dict so the main loop reprocesses them. 'keyword' and
+    # 'ai' classifications are preserved untouched per the spec.
+    # ------------------------------------------------------------------
+    retry_queue: set[str] = set()
+    if args.retry_none:
+        retry_sources = {"none", "incomplete"}
+        retry_queue = {
+            osid for osid, r in results.items()
+            if r.get("classification_source") in retry_sources
+        }
+        for osid in retry_queue:
+            del results[osid]
+        print(
+            f"[classify] --retry-none: cleared {len(retry_queue)} entries "
+            f"({len(results)} remain locked-in)"
+        )
 
     # ------------------------------------------------------------------
     # Fix 5 — handle missing titles up front. Replace the NaN/empty
@@ -426,6 +464,13 @@ def main() -> None:
 
     patterns = build_keyword_patterns()
     session = make_session() if api_key else None
+
+    # Progress counters used by --retry-none for the [ai-retry] log line
+    retry_total = len(retry_queue)
+    retry_done = 0
+    retry_health = 0
+    retry_not_health = 0
+    log_prefix = "ai-retry" if args.retry_none else "classify"
 
     new_count = 0
     for position, (_, row) in enumerate(df.iterrows(), start=1):
@@ -471,16 +516,18 @@ def main() -> None:
             keyword_matches = {}
 
         ai_result: dict[str, Any] | None = None
+        ai_error_reason: str = ""
         if not keyword_matches and api_key and session is not None:
             print(
-                f"[classify] Classifying {position}/{total}: {osid} — "
+                f"[{log_prefix}] Classifying {position}/{total}: {osid} — "
                 f"no keyword match, querying AI..."
             )
             try:
                 ai_result = ai_classify(session, api_key, title, description)
                 api_calls += 1
             except Exception as exc:
-                print(f"[classify]   AI error: {exc}")
+                ai_error_reason = str(exc)[:200]
+                print(f"[{log_prefix}]   AI error: {ai_error_reason}")
             time.sleep(AI_RATE_LIMIT_SEC)
         else:
             if keyword_matches:
@@ -494,12 +541,38 @@ def main() -> None:
                     f"no keyword match, no AI fallback"
                 )
 
-        results[osid] = build_record(osid, keyword_matches, ai_result)
+        record = build_record(osid, keyword_matches, ai_result)
+
+        # If we attempted the AI but it failed entirely (all 3 tiers
+        # exhausted) AND there was no keyword match, downgrade the
+        # source from 'none' to 'incomplete' so we can distinguish
+        # API failures from genuinely-unclassifiable rows.
+        if ai_error_reason and record["classification_source"] == "none":
+            record["classification_source"] = "incomplete"
+            record["non_health_category"] = f"ai_error: {ai_error_reason}"
+
+        results[osid] = record
         new_count += 1
+
+        # --retry-none progress: every record processed counts toward
+        # the retry queue total; log the running health/non-health split
+        # every CHECKPOINT_EVERY records so the user can see progress
+        # at a glance.
+        if osid in retry_queue:
+            retry_done += 1
+            if results[osid].get("health_related"):
+                retry_health += 1
+            else:
+                retry_not_health += 1
 
         if new_count % CHECKPOINT_EVERY == 0:
             save_checkpoint(results, api_calls)
-            print(f"[classify]   checkpoint saved at {len(results)} records")
+            print(f"[{log_prefix}]   checkpoint saved at {len(results)} records")
+            if retry_total:
+                print(
+                    f"[ai-retry] Classified {retry_done}/{retry_total} "
+                    f"({retry_health} health, {retry_not_health} not-health)"
+                )
 
     save_checkpoint(results, api_calls)
     write_outputs(df, results)
