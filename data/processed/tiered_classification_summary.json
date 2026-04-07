@@ -1,0 +1,76 @@
+{
+  "total_experiments": 3829,
+  "tier_1_confirmed": 283,
+  "tier_2_probable": 1168,
+  "tier_3_uncertain": 371,
+  "tier_0_not_health": 2007,
+  "total_health_related_tiered": 1822,
+  "coverage_percent": 47.58,
+  "per_disease_area": {
+    "Cardiovascular diseases": {
+      "tier_1": 68,
+      "tier_2": 365,
+      "tier_3": 127,
+      "total": 560
+    },
+    "Kidney diseases": {
+      "tier_1": 5,
+      "tier_2": 60,
+      "tier_3": 37,
+      "total": 102
+    },
+    "Cancer": {
+      "tier_1": 73,
+      "tier_2": 275,
+      "tier_3": 197,
+      "total": 545
+    },
+    "Neurological diseases": {
+      "tier_1": 131,
+      "tier_2": 415,
+      "tier_3": 136,
+      "total": 682
+    },
+    "Eye diseases": {
+      "tier_1": 28,
+      "tier_2": 147,
+      "tier_3": 3,
+      "total": 178
+    },
+    "Rare inherited disorders": {
+      "tier_1": 29,
+      "tier_2": 114,
+      "tier_3": 226,
+      "total": 369
+    },
+    "Women's health": {
+      "tier_1": 9,
+      "tier_2": 76,
+      "tier_3": 10,
+      "total": 95
+    },
+    "Endocrine and metabolic diseases": {
+      "tier_1": 43,
+      "tier_2": 420,
+      "tier_3": 278,
+      "total": 741
+    },
+    "Musculoskeletal diseases": {
+      "tier_1": 95,
+      "tier_2": 442,
+      "tier_3": 99,
+      "total": 636
+    },
+    "Mental health": {
+      "tier_1": 11,
+      "tier_2": 178,
+      "tier_3": 19,
+      "total": 208
+    }
+  },
+  "thresholds": {
+    "tier2_confidence": 0.7,
+    "proxy_confidence_ai": 0.75,
+    "proxy_confidence_keyword": 0.6
+  }
+}

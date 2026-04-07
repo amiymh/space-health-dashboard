@@ -69,6 +69,20 @@ def load_all() -> dict[str, pd.DataFrame]:
     pubs = data_loader.load_publication_counts()
     therapies = data_loader.load_approved_therapies()
     links = data_loader.load_trial_experiment_links()
+    tiered = data_loader.load_tiered_classification()
+    if not tiered.empty:
+        tiered["health_related"] = (
+            tiered["health_related"].astype(str).str.lower().map({"true": True, "false": False}).fillna(False)
+        )
+        tiered["nlp_classified"] = (
+            tiered["nlp_classified"].astype(str).str.lower().map({"true": True, "false": False}).fillna(False)
+        )
+        tiered["ai_classified"] = (
+            tiered["ai_classified"].astype(str).str.lower().map({"true": True, "false": False}).fillna(False)
+        )
+        for col in ("disease_areas", "primary_disease_area", "nlp_mesh_evidence", "classification_source"):
+            if col in tiered.columns:
+                tiered[col] = tiered[col].fillna("")
 
     return {
         "classified_nlp": nlp,
@@ -77,12 +91,18 @@ def load_all() -> dict[str, pd.DataFrame]:
         "pubs": pubs,
         "therapies": therapies,
         "links": links,
+        "tiered": tiered,
     }
 
 
 @st.cache_data(show_spinner=False)
 def load_link_summary() -> dict:
     return data_loader.load_trial_linkage_summary()
+
+
+@st.cache_data(show_spinner=False)
+def load_tiered_summary() -> dict:
+    return data_loader.load_tiered_classification_summary()
 
 
 @st.cache_data(show_spinner=False)
@@ -97,7 +117,9 @@ trials_df: pd.DataFrame = data["trials"]
 pubs_df: pd.DataFrame = data["pubs"]
 therapies_df: pd.DataFrame = data["therapies"]
 links_df: pd.DataFrame = data["links"]
+tiered_df: pd.DataFrame = data["tiered"]
 link_summary: dict = load_link_summary()
+tiered_summary: dict = load_tiered_summary()
 
 class_config = load_class_config()
 active_nlp_backend = class_config.get("backend", "scispacy")
@@ -236,6 +258,7 @@ TAB_LABELS = [
     "Translational Pipeline",
     "Clinical Trials",
     "Trial-Experiment Links",
+    "Classification Comparison",
     "Approved Therapies",
     "Gap Analysis",
     "Disease Deep-Dive",
@@ -261,6 +284,17 @@ with tabs[0]:
         m3.metric("Clinical trials", f"{total_trials:,}")
         m4.metric("PubMed (space biology)", f"{baseline_pubs:,}")
 
+        # Tiered breakdown caption (spec 05 section 4.2)
+        if tiered_summary:
+            t1 = int(tiered_summary.get("tier_1_confirmed", 0))
+            t2 = int(tiered_summary.get("tier_2_probable", 0))
+            t3 = int(tiered_summary.get("tier_3_uncertain", 0))
+            st.caption(
+                f"**Tiered classification** (combines NLP + AI): "
+                f"{t1:,} confirmed · {t2:,} probable · {t3:,} uncertain · "
+                f"see the *Classification Comparison* tab for details."
+            )
+
         st.divider()
 
         col_left, col_right = st.columns([3, 2])
@@ -268,30 +302,87 @@ with tabs[0]:
         # Horizontal bar — experiments per disease area, descending
         with col_left:
             st.markdown("**Experiments per disease area**")
-            health_df = (
-                classified_df[classified_df["health_related"]]
-                if "health_related" in classified_df else classified_df
-            )
-            counts = disease_count_table(health_df).sort_values("count", ascending=True)
-            fig_bar = px.bar(
-                counts,
-                x="count",
-                y="disease_area",
-                orientation="h",
-                text="count",
-                color="count",
-                color_continuous_scale="Blues",
-            )
-            fig_bar.update_layout(
-                height=420,
-                showlegend=False,
-                coloraxis_showscale=False,
-                xaxis_title="Experiments (multi-tag)",
-                yaxis_title="",
-                margin=dict(l=10, r=10, t=10, b=10),
-            )
-            fig_bar.update_traces(textposition="outside")
-            st.plotly_chart(fig_bar, width="stretch")
+            # Prefer the tiered totals (T1+T2) when available — that's the
+            # spec 05 default. Tier 3 (uncertain) shown as faint annotation.
+            if tiered_summary and "per_disease_area" in tiered_summary:
+                area_rows = []
+                for area in DISEASE_AREA_NAMES:
+                    b = tiered_summary["per_disease_area"].get(area, {})
+                    t1 = int(b.get("tier_1", 0))
+                    t2 = int(b.get("tier_2", 0))
+                    t3 = int(b.get("tier_3", 0))
+                    area_rows.append(
+                        {
+                            "disease_area": area,
+                            "Tier 1": t1,
+                            "Tier 2": t2,
+                            "Tier 3": t3,
+                            "default_total": t1 + t2,
+                            "hover": f"{t1} confirmed · {t2} probable · {t3} uncertain",
+                        }
+                    )
+                counts_df = pd.DataFrame(area_rows).sort_values("default_total", ascending=True)
+                stack_long = counts_df.melt(
+                    id_vars=["disease_area", "hover"],
+                    value_vars=["Tier 1", "Tier 2", "Tier 3"],
+                    var_name="tier",
+                    value_name="count",
+                )
+                fig_bar = px.bar(
+                    stack_long,
+                    x="count",
+                    y="disease_area",
+                    color="tier",
+                    orientation="h",
+                    color_discrete_map={
+                        "Tier 1": "#16a34a",
+                        "Tier 2": "#2563eb",
+                        "Tier 3": "#cbd5e1",
+                    },
+                    custom_data=["hover"],
+                )
+                fig_bar.update_layout(
+                    barmode="stack",
+                    height=420,
+                    xaxis_title="Experiments (multi-tag)",
+                    yaxis_title="",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
+                fig_bar.update_traces(
+                    hovertemplate="%{y}<br>%{customdata[0]}<extra></extra>",
+                )
+                st.plotly_chart(fig_bar, width="stretch")
+                st.caption(
+                    "Default counts = **Tier 1 + Tier 2** (NLP-confirmed plus "
+                    "AI-confident). Tier 3 (uncertain) shown in grey for "
+                    "context. Hover any bar for the full breakdown."
+                )
+            else:
+                health_df = (
+                    classified_df[classified_df["health_related"]]
+                    if "health_related" in classified_df else classified_df
+                )
+                counts = disease_count_table(health_df).sort_values("count", ascending=True)
+                fig_bar = px.bar(
+                    counts,
+                    x="count",
+                    y="disease_area",
+                    orientation="h",
+                    text="count",
+                    color="count",
+                    color_continuous_scale="Blues",
+                )
+                fig_bar.update_layout(
+                    height=420,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    xaxis_title="Experiments (multi-tag)",
+                    yaxis_title="",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                fig_bar.update_traces(textposition="outside")
+                st.plotly_chart(fig_bar, width="stretch")
 
         # Donut — health vs not health
         with col_right:
@@ -700,8 +791,347 @@ with tabs[4]:
         )
 
 
-# --- Tab 6: Approved Therapies & Devices (stub) ---------------------------
+# --- Tab 6: Classification Comparison (spec 05) ---------------------------
 with tabs[5]:
+    st.subheader("Classification Comparison")
+    if tiered_df.empty or not tiered_summary:
+        empty_state(
+            "No tiered classification yet.",
+            "13_build_tiered_classification.py",
+        )
+    else:
+        # ---- Section A: Tier Overview ----
+        st.markdown("### Tier overview")
+        total_n = int(tiered_summary.get("total_experiments", len(tiered_df)))
+        t1 = int(tiered_summary.get("tier_1_confirmed", 0))
+        t2 = int(tiered_summary.get("tier_2_probable", 0))
+        t3 = int(tiered_summary.get("tier_3_uncertain", 0))
+        t0 = int(tiered_summary.get("tier_0_not_health", 0))
+        coverage = float(tiered_summary.get("coverage_percent", 0.0))
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tier 1 — Confirmed", f"{t1:,}",
+                  delta=f"{t1/total_n*100:.1f}% of total")
+        c2.metric("Tier 2 — Probable", f"{t2:,}",
+                  delta=f"{t2/total_n*100:.1f}% of total")
+        c3.metric("Tier 3 — Uncertain", f"{t3:,}",
+                  delta=f"{t3/total_n*100:.1f}% of total")
+        c4.metric("Tier 0 — Not health", f"{t0:,}",
+                  delta=f"{t0/total_n*100:.1f}% of total")
+
+        st.caption(
+            f"**Tiered coverage:** {t1+t2+t3:,} of {total_n:,} experiments are "
+            f"health-related across tiers 1-3 ({coverage:.1f}%). Tier 1 "
+            f"experiments are backed by both NLP-detected MeSH evidence and "
+            f"AI agreement. Tier 2 are AI-confident but lack a literal disease "
+            f"term in the text. Tier 3 are AI-tagged but with low confidence — "
+            f"treat with care."
+        )
+
+        # Stacked horizontal bar
+        tier_dist = pd.DataFrame(
+            {
+                "tier": ["Tier 1 — Confirmed", "Tier 2 — Probable",
+                         "Tier 3 — Uncertain", "Tier 0 — Not health"],
+                "count": [t1, t2, t3, t0],
+                "color": ["#16a34a", "#2563eb", "#f59e0b", "#cbd5e1"],
+            }
+        )
+        fig_tier = px.bar(
+            tier_dist,
+            x="count",
+            y=["Tiered classification"] * 4,
+            color="tier",
+            orientation="h",
+            color_discrete_map={
+                "Tier 1 — Confirmed": "#16a34a",
+                "Tier 2 — Probable": "#2563eb",
+                "Tier 3 — Uncertain": "#f59e0b",
+                "Tier 0 — Not health": "#cbd5e1",
+            },
+            text="count",
+            labels={"y": "", "count": "Experiments"},
+        )
+        fig_tier.update_layout(
+            barmode="stack",
+            height=170,
+            margin=dict(l=10, r=10, t=10, b=10),
+            yaxis=dict(showticklabels=False),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.6, x=0),
+        )
+        st.plotly_chart(fig_tier, width="stretch")
+
+        st.divider()
+
+        # ---- Section B: Per-Disease-Area Breakdown ----
+        st.markdown("### Per disease area")
+        per_area = tiered_summary.get("per_disease_area", {})
+        area_rows = []
+        for area in DISEASE_AREA_NAMES:
+            b = per_area.get(area, {})
+            area_rows.append(
+                {
+                    "Disease area": area,
+                    "Tier 1": int(b.get("tier_1", 0)),
+                    "Tier 2": int(b.get("tier_2", 0)),
+                    "Tier 3": int(b.get("tier_3", 0)),
+                    "Total": int(b.get("total", 0)),
+                }
+            )
+        per_area_df = pd.DataFrame(area_rows)
+
+        col_tbl, col_chart = st.columns([1, 1])
+        with col_tbl:
+            st.dataframe(
+                per_area_df,
+                width="stretch",
+                hide_index=True,
+                height=400,
+            )
+        with col_chart:
+            stack_long = per_area_df.melt(
+                id_vars="Disease area",
+                value_vars=["Tier 1", "Tier 2", "Tier 3"],
+                var_name="tier",
+                value_name="count",
+            )
+            fig_stack = px.bar(
+                stack_long,
+                x="count",
+                y="Disease area",
+                color="tier",
+                orientation="h",
+                color_discrete_map={
+                    "Tier 1": "#16a34a",
+                    "Tier 2": "#2563eb",
+                    "Tier 3": "#f59e0b",
+                },
+                labels={"count": "Experiments", "Disease area": ""},
+            )
+            fig_stack.update_layout(
+                barmode="stack",
+                height=400,
+                margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            )
+            st.plotly_chart(fig_stack, width="stretch")
+
+        st.divider()
+
+        # ---- Section C: Method Comparison ----
+        st.markdown("### Method comparison (NLP vs AI)")
+
+        nlp_counts = disease_count_table(
+            classified_nlp_df[classified_nlp_df["health_related"]]
+        ).set_index("disease_area")["count"]
+        ai_counts = disease_count_table(
+            classified_ai_df[classified_ai_df["health_related"]]
+        ).set_index("disease_area")["count"]
+
+        method_df = pd.DataFrame(
+            {
+                "Disease area": DISEASE_AREA_NAMES,
+                "NLP / MeSH": [int(nlp_counts.get(a, 0)) for a in DISEASE_AREA_NAMES],
+                "AI Extended": [int(ai_counts.get(a, 0)) for a in DISEASE_AREA_NAMES],
+            }
+        )
+        method_long = method_df.melt(
+            id_vars="Disease area",
+            var_name="method",
+            value_name="count",
+        )
+        fig_method = px.bar(
+            method_long,
+            x="count",
+            y="Disease area",
+            color="method",
+            orientation="h",
+            barmode="group",
+            color_discrete_map={
+                "NLP / MeSH": "#16a34a",
+                "AI Extended": "#7c3aed",
+            },
+            labels={"count": "Experiments", "Disease area": ""},
+        )
+        fig_method.update_layout(
+            height=440,
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        )
+        st.plotly_chart(fig_method, width="stretch")
+
+        # Agreement metrics from the comparison CSV
+        comparison_df = data_loader.load_classification_comparison()
+        if not comparison_df.empty:
+            n_cmp = len(comparison_df)
+            agree_health = int(comparison_df["agree_health"].astype(str).str.lower().eq("true").sum())
+            agree_exact = int(comparison_df["agree_areas"].astype(str).str.lower().eq("true").sum())
+            agree_overlap = int(comparison_df["any_overlap"].astype(str).str.lower().eq("true").sum())
+            disagree = int(n_cmp - agree_health)
+
+            am1, am2, am3, am4 = st.columns(4)
+            am1.metric("Agree on health/not", f"{agree_health/n_cmp*100:.1f}%",
+                       delta=f"{agree_health:,} / {n_cmp:,}")
+            am2.metric("Exact disease-area match", f"{agree_exact/n_cmp*100:.1f}%",
+                       delta=f"{agree_exact:,}")
+            am3.metric("≥1 area overlap", f"{agree_overlap/n_cmp*100:.1f}%",
+                       delta=f"{agree_overlap:,}")
+            am4.metric("Complete disagreement", f"{disagree/n_cmp*100:.1f}%",
+                       delta=f"{disagree:,}", delta_color="inverse")
+
+            # Scatter — area count NLP vs area count AI per experiment
+            scatter_src = comparison_df.copy()
+            scatter_src["nlp_n"] = scatter_src["nlp_disease_areas"].fillna("").apply(
+                lambda s: 0 if not s else len([a for a in s.split("; ") if a.strip()])
+            )
+            scatter_src["ai_n"] = scatter_src["ai_disease_areas"].fillna("").apply(
+                lambda s: 0 if not s else len([a for a in s.split("; ") if a.strip()])
+            )
+            agg = scatter_src.groupby(["nlp_n", "ai_n"]).size().reset_index(name="count")
+            fig_scatter = px.scatter(
+                agg,
+                x="nlp_n",
+                y="ai_n",
+                size="count",
+                color="count",
+                color_continuous_scale="Blues",
+                labels={
+                    "nlp_n": "NLP disease areas (per experiment)",
+                    "ai_n": "AI disease areas (per experiment)",
+                    "count": "Experiments",
+                },
+            )
+            fig_scatter.update_layout(
+                height=380,
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(fig_scatter, width="stretch")
+            st.caption(
+                "Bubble size = experiments with that combination. Points on "
+                "the diagonal = methods agree on how many areas; off-diagonal "
+                "= one method tagged more areas than the other."
+            )
+
+        st.divider()
+
+        # ---- Section D: Experiment Explorer ----
+        st.markdown("### Experiment explorer")
+        ex_col1, ex_col2, ex_col3 = st.columns([2, 2, 3])
+        with ex_col1:
+            tier_pick = st.multiselect(
+                "Tier",
+                options=["Tier 1 — Confirmed", "Tier 2 — Probable",
+                         "Tier 3 — Uncertain", "Tier 0 — Not health"],
+                default=["Tier 1 — Confirmed", "Tier 2 — Probable"],
+            )
+        with ex_col2:
+            tier_area_pick = st.multiselect(
+                "Disease area",
+                options=DISEASE_AREA_NAMES,
+                default=[],
+                key="tier_area_pick",
+            )
+        with ex_col3:
+            tier_search = st.text_input(
+                "Search title or osID",
+                placeholder="bone, OS-118, ...",
+                key="tier_search",
+            )
+
+        tier_label_to_int = {
+            "Tier 1 — Confirmed": 1,
+            "Tier 2 — Probable": 2,
+            "Tier 3 — Uncertain": 3,
+            "Tier 0 — Not health": 0,
+        }
+        tier_ints = {tier_label_to_int[t] for t in tier_pick} if tier_pick else set()
+
+        view_tier = tiered_df.copy()
+        if tier_ints:
+            view_tier = view_tier[view_tier["tier"].isin(tier_ints)]
+        if tier_area_pick:
+            pat = "|".join(pd.io.common.re.escape(a) for a in tier_area_pick)  # type: ignore
+            view_tier = view_tier[
+                view_tier["disease_areas"].fillna("").str.contains(pat, regex=True)
+            ]
+        if tier_search:
+            s = tier_search.strip()
+            mask = (
+                view_tier["title"].fillna("").str.contains(s, case=False, regex=False)
+                | view_tier["osID"].fillna("").str.contains(s, case=False, regex=False)
+            )
+            view_tier = view_tier[mask]
+
+        st.caption(f"Showing **{len(view_tier):,}** of {len(tiered_df):,} experiments.")
+        st.dataframe(
+            view_tier[
+                [
+                    "osID",
+                    "title",
+                    "tier",
+                    "tier_label",
+                    "disease_areas",
+                    "primary_disease_area",
+                    "ai_confidence",
+                    "nlp_classified",
+                    "ai_classified",
+                    "nlp_mesh_evidence",
+                    "classification_source",
+                ]
+            ],
+            width="stretch",
+            height=480,
+            hide_index=True,
+            column_config={
+                "osID": st.column_config.TextColumn("OS ID", width="small"),
+                "title": st.column_config.TextColumn("Title", width="large"),
+                "tier": st.column_config.NumberColumn("Tier", width="small"),
+                "tier_label": st.column_config.TextColumn("Tier label", width="medium"),
+                "disease_areas": st.column_config.TextColumn("Disease areas", width="medium"),
+                "primary_disease_area": st.column_config.TextColumn("Primary", width="medium"),
+                "ai_confidence": st.column_config.NumberColumn("AI conf", format="%.2f", width="small"),
+                "nlp_classified": st.column_config.CheckboxColumn("NLP?", width="small"),
+                "ai_classified": st.column_config.CheckboxColumn("AI?", width="small"),
+                "nlp_mesh_evidence": st.column_config.TextColumn("MeSH evidence", width="medium"),
+                "classification_source": st.column_config.TextColumn("Source", width="small"),
+            },
+        )
+        st.download_button(
+            "Download tiered CSV",
+            data=view_tier.to_csv(index=False).encode("utf-8"),
+            file_name="tiered_classification_filtered.csv",
+            mime="text/csv",
+        )
+
+        st.divider()
+
+        # ---- Section E: Backend Status ----
+        st.markdown("### Backend status")
+        st.markdown(
+            "| Backend | Status | Notes |\n"
+            "|---|---|---|\n"
+            f"| **SciSpacy** (`en_ner_bc5cdr_md` + MeSH linker) | "
+            f"{'**Active**' if active_nlp_backend == 'scispacy' else 'Available'} | "
+            f"Default. No account required. Local NER. |\n"
+            "| **PubTator Central API** | Available (not yet run) | "
+            "NLM REST API. Currently the ad-hoc text-annotate endpoint is "
+            "unreachable; will activate when reinstated. |\n"
+            "| **NLM MetaMapLite** (UMLS 2024AA) | Available | "
+            "Highest accuracy of the three. Requires a free UMLS account "
+            "to download ~2 GB of inverted-index data. |\n"
+            "| **Claude Sonnet 4.5** (OpenRouter) | Available — comparison only | "
+            "The legacy AI classification. Used to populate Tier 2/3. "
+            "Toggle via the sidebar to use it as the active classification. |"
+        )
+        st.caption(
+            "When additional backends are activated their results will appear "
+            "here for comparison. Switching the default backend is a one-line "
+            "config change in `config/classification_config.json`."
+        )
+
+
+# --- Tab 7: Approved Therapies & Devices (stub) ---------------------------
+with tabs[6]:
     st.subheader("Approved Therapies & Devices")
     if therapies_df.empty:
         empty_state("No therapies data yet.", "08_research_therapies.py")
@@ -709,8 +1139,8 @@ with tabs[5]:
         st.dataframe(therapies_df, width="stretch")
 
 
-# --- Tab 7: Gap Analysis --------------------------------------------------
-with tabs[6]:
+# --- Tab 8: Gap Analysis --------------------------------------------------
+with tabs[7]:
     st.subheader("Gap Analysis")
     if classified_df.empty or trials_df.empty or pubs_per_area.empty:
         empty_state(
@@ -806,8 +1236,8 @@ with tabs[6]:
                 st.write(f"- {area} — {trials} trials / {exp} exp ({ratio:.2f})")
 
 
-# --- Tab 8: Disease Deep-Dive ---------------------------------------------
-with tabs[7]:
+# --- Tab 9: Disease Deep-Dive ---------------------------------------------
+with tabs[8]:
     st.subheader("Disease Deep-Dive")
     pick = st.selectbox("Select a disease area", DISEASE_AREA_NAMES)
     st.caption(
@@ -819,6 +1249,15 @@ with tabs[7]:
             classified_df["disease_areas"].fillna("").str.contains(pick, case=False)
         ]
 
+        # Tiered breakdown for this area (spec 05 section 4.2)
+        area_tier = (
+            tiered_summary.get("per_disease_area", {}).get(pick, {})
+            if tiered_summary else {}
+        )
+        t1_n = int(area_tier.get("tier_1", 0))
+        t2_n = int(area_tier.get("tier_2", 0))
+        t3_n = int(area_tier.get("tier_3", 0))
+
         # Per-area linkage counts (spec 04 section 7.2)
         area_links = (
             links_df[links_df["shared_areas"].fillna("").str.contains(pick, regex=False)]
@@ -827,10 +1266,18 @@ with tabs[7]:
         linked_trials_count = int(area_links["nct_id"].nunique()) if not area_links.empty else 0
         linked_exp_count = int(area_links["osID"].nunique()) if not area_links.empty else 0
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Experiments in area", f"{len(match):,}")
-        m2.metric("Linked trials", f"{linked_trials_count:,}")
-        m3.metric("Linked experiments", f"{linked_exp_count:,}")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Tier 1 confirmed", f"{t1_n:,}")
+        m2.metric("Tier 2 probable", f"{t2_n:,}")
+        m3.metric("Tier 3 uncertain", f"{t3_n:,}")
+        m4.metric("Linked trials", f"{linked_trials_count:,}")
+        m5.metric("Linked experiments", f"{linked_exp_count:,}")
+        if tiered_summary:
+            st.caption(
+                f"**{pick}**: {t1_n + t2_n:,} experiments by default "
+                f"(Tier 1 + Tier 2). {t3_n:,} additional uncertain. "
+                f"See *Classification Comparison* for the full tier explainer."
+            )
 
         st.dataframe(
             match[["osID", "title", "primary_disease_area", "relevance_type"]].head(50),
@@ -868,8 +1315,8 @@ with tabs[7]:
             )
 
 
-# --- Tab 9: Sources & Methods ---------------------------------------------
-with tabs[8]:
+# --- Tab 10: Sources & Methods --------------------------------------------
+with tabs[9]:
     st.subheader("Sources & Methods")
     osdr_count = int(classified_df["osID"].astype(str).str.startswith("OS-").sum()) \
         if not classified_df.empty else 0

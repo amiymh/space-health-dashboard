@@ -93,6 +93,21 @@ def load_trial_linkage_summary() -> dict:
         return {}
 
 
+def load_tiered_classification() -> pd.DataFrame:
+    """Spec 05 — combined NLP+AI tier assignments per experiment."""
+    return _safe_read("tiered_classification.csv")
+
+
+def load_tiered_classification_summary() -> dict:
+    path = PROCESSED_DIR / "tiered_classification_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
 def load_publication_counts() -> pd.DataFrame:
     return _safe_read("publication_counts.csv")
 
