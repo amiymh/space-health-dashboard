@@ -1,68 +1,464 @@
 """
 05_classify_experiments.py
 
-Phase 2: classify every experiment in all_experiments.csv against the 10
-SNIH disease areas using Claude (via OpenRouter).
+Phase 2: classify every experiment in osdr_experiments.csv against the 10
+SNIH disease areas.
 
-For each experiment, the model returns:
-  - For each relevant disease area: relevance ("direct" / "indirect" / "none"),
-    confidence (0.0-1.0), and a one-sentence reasoning string.
-  - Or {"health_related": false, "category": "..."} for non-health work.
+Two-stage strategy (free first, then AI fallback):
+
+  1. Keyword stage — match the experiment's title + objectives + approach +
+     results against the keyword lists in `scripts/config.py`. Free, instant.
+  2. AI stage — for experiments where the keyword stage finds zero matches,
+     query Claude (claude-3.5-sonnet) via OpenRouter for a structured
+     classification. Rate-limited to 1 req/sec.
+
+Each result records its `classification_source`:
+  - "keyword"   — keyword match only
+  - "ai"        — AI classification only (no keyword match)
+  - "both"      — both ran (only happens if AI is forced for ambiguous cases)
+  - "none"      — neither stage produced a result
 
 Inputs:
-  - data/processed/all_experiments.csv
+  - data/processed/osdr_experiments.csv
 
-Output:
-  - data/processed/classified_experiments.csv (master + 10 disease columns)
-  - data/checkpoints/classification_checkpoint.json (resume support)
+Outputs:
+  - data/processed/classified_experiments.csv
+  - data/processed/classification_details.json
+  - data/checkpoints/classify_checkpoint.json   (resume state)
 
-Batch size: 50 per API run. Estimated cost: $5-15 across the catalog.
-
-Status: STUB.
+Run is safe to interrupt and re-run — it picks up where the checkpoint left
+off.
 
 See SPACE_HEALTH_SPECS.md section 3.3.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import sys
+import time
 from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import get_env, load_env  # noqa: E402
+from config import (  # noqa: E402
+    CHECKPOINT_DIR,
+    DISEASE_AREAS,
+    DISEASE_AREA_NAMES,
+    PROCESSED_DIR,
+    REQUEST_HEADERS,
+    get_env,
+    load_env,
+    load_json,
+    save_json,
+)
 
-CLASSIFICATION_PROMPT = """\
-Classify this ISS experiment against these disease areas. Return a JSON object.
+INPUT_CSV = PROCESSED_DIR / "osdr_experiments.csv"
+CSV_OUTPUT = PROCESSED_DIR / "classified_experiments.csv"
+DETAILS_JSON = PROCESSED_DIR / "classification_details.json"
+CHECKPOINT_FILE = CHECKPOINT_DIR / "classify_checkpoint.json"
 
-Experiment: {title}
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Spec asked for claude-3-5-sonnet-20241022, but that model has been
+# deprecated on OpenRouter (2026-04). Substituting Sonnet 4.5 — closest
+# equivalent for classification accuracy, similar pricing tier.
+MODEL = "anthropic/claude-sonnet-4.5"
+AI_RATE_LIMIT_SEC = 1.0
+CHECKPOINT_EVERY = 50
+
+# Confidence assigned to keyword-only matches (the spec wants AI calls to
+# carry richer confidence signals; keyword hits are deterministic so they
+# get a high but not perfect score)
+KEYWORD_CONFIDENCE = 0.9
+
+
+# ---------------------------------------------------------------------------
+# Keyword matching
+# ---------------------------------------------------------------------------
+def build_keyword_patterns() -> dict[str, list[tuple[str, re.Pattern[str]]]]:
+    """
+    Pre-compile case-insensitive word-boundary regexes for every keyword in
+    every disease area. Multi-word phrases use boundaries on both ends; the
+    pattern still tolerates internal whitespace because re.escape preserves
+    spaces literally.
+    """
+    patterns: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+    for area, entry in DISEASE_AREAS.items():
+        keywords = entry["primary"] + entry.get("expansions", [])
+        compiled: list[tuple[str, re.Pattern[str]]] = []
+        for kw in keywords:
+            kw_lower = kw.lower().strip()
+            if not kw_lower:
+                continue
+            pattern = re.compile(r"\b" + re.escape(kw_lower) + r"\b", re.IGNORECASE)
+            compiled.append((kw, pattern))
+        patterns[area] = compiled
+    return patterns
+
+
+def keyword_classify(
+    text: str,
+    patterns: dict[str, list[tuple[str, re.Pattern[str]]]],
+) -> dict[str, list[str]]:
+    """Return {disease_area: [matched_keywords]} for every area with hits."""
+    if not text:
+        return {}
+    text_lower = text.lower()
+    matches: dict[str, list[str]] = {}
+    for area, kw_patterns in patterns.items():
+        hits = [kw for kw, pat in kw_patterns if pat.search(text_lower)]
+        if hits:
+            matches[area] = hits
+    return matches
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter / Claude classification
+# ---------------------------------------------------------------------------
+PROMPT_TEMPLATE = """You are classifying ISS space experiments against health disease areas.
+
+Experiment title: {title}
 Description: {description}
 
-Disease areas: {areas}
+Classify against these 10 disease areas:
+1. Cardiovascular diseases
+2. Kidney diseases
+3. Cancer
+4. Neurological diseases
+5. Eye diseases
+6. Rare inherited disorders
+7. Women's health
+8. Endocrine and metabolic diseases
+9. Musculoskeletal diseases
+10. Mental health
 
-For each relevant disease area, assign:
-- relevance: "direct" (explicitly studies this disease), "indirect" (results
-  applicable to this disease), or "none"
-- confidence: 0.0-1.0
-- reasoning: one sentence explaining the connection
+Return ONLY valid JSON, no markdown:
+{{
+  "health_related": true,
+  "disease_areas": [
+    {{"area": "...", "relevance": "direct", "confidence": 0.0, "reasoning": "one sentence"}}
+  ],
+  "non_health_category": "if not health related, what category: physical science / materials / technology / plant biology / education / other"
+}}"""
 
-If the experiment is not health-related, return
-{{"health_related": false, "category": "..."}}.
-"""
+
+def make_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=4,
+        backoff_factor=2.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["POST"]),
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.headers.update(REQUEST_HEADERS)
+    return session
 
 
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def _strip_fences(text: str) -> str:
+    return _FENCE_RE.sub("", text).strip()
+
+
+def ai_classify(
+    session: requests.Session,
+    api_key: str,
+    title: str,
+    description: str,
+) -> dict[str, Any]:
+    prompt = PROMPT_TEMPLATE.format(
+        title=title or "(no title)",
+        description=(description or "(no description)")[:4000],
+    )
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1200,
+        "temperature": 0.0,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/amiymh/space-health-dashboard",
+        "X-Title": "Space-Health Dashboard",
+    }
+
+    resp = session.post(OPENROUTER_URL, json=payload, headers=headers, timeout=120)
+    resp.raise_for_status()
+    body = resp.json()
+    content = body["choices"][0]["message"]["content"]
+    cleaned = _strip_fences(content)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"AI response was not valid JSON: {cleaned[:200]}") from exc
+
+    # Normalize area names to match config exactly (Claude sometimes drops
+    # the trailing "diseases" or pluralizes differently)
+    normalized_areas: list[dict[str, Any]] = []
+    canonical = {a.lower(): a for a in DISEASE_AREA_NAMES}
+    for entry in parsed.get("disease_areas") or []:
+        if not isinstance(entry, dict):
+            continue
+        area = (entry.get("area") or "").strip()
+        match = canonical.get(area.lower())
+        if not match:
+            # Loose match — pick the canonical name whose first word matches
+            for cname in DISEASE_AREA_NAMES:
+                if cname.lower().split()[0] in area.lower():
+                    match = cname
+                    break
+        if not match:
+            continue
+        normalized_areas.append({
+            "area": match,
+            "relevance": (entry.get("relevance") or "indirect").lower(),
+            "confidence": float(entry.get("confidence") or 0.0),
+            "reasoning": (entry.get("reasoning") or "").strip(),
+        })
+
+    return {
+        "health_related": bool(parsed.get("health_related", bool(normalized_areas))),
+        "disease_areas": normalized_areas,
+        "non_health_category": (parsed.get("non_health_category") or "").strip(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Result merging
+# ---------------------------------------------------------------------------
+def build_record(
+    osid: str,
+    keyword_matches: dict[str, list[str]],
+    ai_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    details: list[dict[str, Any]] = []
+
+    # Keyword-derived entries
+    for area, kws in keyword_matches.items():
+        details.append({
+            "area": area,
+            "relevance": "direct",
+            "confidence": KEYWORD_CONFIDENCE,
+            "reasoning": f"Keyword match: {', '.join(kws[:4])}",
+            "source": "keyword",
+        })
+
+    # AI-derived entries — append areas not already keyword-matched
+    if ai_result:
+        for ai_area in ai_result.get("disease_areas", []):
+            if ai_area["area"] in keyword_matches:
+                continue
+            details.append({**ai_area, "source": "ai"})
+
+    # Source flag
+    if keyword_matches and ai_result:
+        source = "both"
+    elif keyword_matches:
+        source = "keyword"
+    elif ai_result:
+        source = "ai"
+    else:
+        source = "none"
+
+    # Health-related: any disease area present, or AI explicitly said so
+    health_related = bool(details)
+    if ai_result is not None and not keyword_matches:
+        health_related = bool(ai_result.get("health_related"))
+
+    non_health_category = ""
+    if ai_result and not health_related:
+        non_health_category = ai_result.get("non_health_category", "") or "unknown"
+
+    # Primary disease area = highest confidence (keyword wins ties at 0.9)
+    primary_area = ""
+    relevance_type = ""
+    if details:
+        ranked = sorted(details, key=lambda d: -float(d.get("confidence", 0.0)))
+        primary_area = ranked[0]["area"]
+        relevance_type = ranked[0].get("relevance", "")
+
+    return {
+        "osID": osid,
+        "health_related": health_related,
+        "disease_areas_list": [d["area"] for d in details],
+        "primary_disease_area": primary_area,
+        "relevance_type": relevance_type,
+        "classification_source": source,
+        "non_health_category": non_health_category,
+        "details": details,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+def save_checkpoint(results: dict[str, dict[str, Any]], api_calls: int) -> None:
+    save_json(CHECKPOINT_FILE, {"results": results, "api_calls": api_calls})
+
+
+def write_outputs(df: pd.DataFrame, results: dict[str, dict[str, Any]]) -> None:
+    rows = []
+    for _, row in df.iterrows():
+        osid = str(row["osID"])
+        r = results.get(osid, {})
+        merged = row.to_dict()
+        merged["health_related"] = r.get("health_related", "")
+        merged["disease_areas"] = "; ".join(r.get("disease_areas_list", []))
+        merged["primary_disease_area"] = r.get("primary_disease_area", "")
+        merged["relevance_type"] = r.get("relevance_type", "")
+        merged["classification_source"] = r.get("classification_source", "")
+        merged["non_health_category"] = r.get("non_health_category", "")
+        rows.append(merged)
+    out_df = pd.DataFrame(rows)
+    out_df.to_csv(CSV_OUTPUT, index=False)
+
+    details_payload = {
+        osid: {
+            "primary_disease_area": r.get("primary_disease_area", ""),
+            "classification_source": r.get("classification_source", ""),
+            "health_related": r.get("health_related"),
+            "non_health_category": r.get("non_health_category", ""),
+            "details": r.get("details", []),
+        }
+        for osid, r in results.items()
+    }
+    save_json(DETAILS_JSON, details_payload)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main() -> None:
     load_env()
-    _ = get_env("OPENROUTER_API_KEY", required=False)
-    # Will use scripts.config.DISEASE_AREAS and PROCESSED_DIR once implemented.
+    api_key = get_env("OPENROUTER_API_KEY")
+    if not api_key:
+        print("[classify] WARNING: no OPENROUTER_API_KEY in .env — AI fallback disabled")
 
-    # TODO: Load all_experiments.csv with pandas.
-    # TODO: Resume from checkpoint if present.
-    # TODO: For each batch of 50:
-    #         build prompts, call OpenRouter with claude-opus-4-6 (or similar),
-    #         parse JSON responses, append to results, checkpoint.
-    # TODO: Write classified_experiments.csv with disease_area columns.
+    if not INPUT_CSV.exists():
+        raise SystemExit(
+            f"[classify] {INPUT_CSV} missing — run scripts/01_fetch_nasa_osdr.py first"
+        )
 
-    print("Script not yet implemented. See SPACE_HEALTH_SPECS.md Section 3.3.")
+    df = pd.read_csv(INPUT_CSV).fillna("")
+    total = len(df)
+    print(f"[classify] Loaded {total} experiments from {INPUT_CSV.name}")
+
+    checkpoint = load_json(CHECKPOINT_FILE, default={}) or {}
+    results: dict[str, dict[str, Any]] = checkpoint.get("results", {})
+    api_calls: int = int(checkpoint.get("api_calls", 0))
+    if results:
+        print(f"[classify] Resuming — {len(results)} experiments already classified")
+
+    patterns = build_keyword_patterns()
+    session = make_session() if api_key else None
+
+    new_count = 0
+    for position, (_, row) in enumerate(df.iterrows(), start=1):
+        osid = str(row["osID"])
+        if osid in results:
+            continue
+
+        title = str(row.get("title") or "").strip()
+        objectives = str(row.get("objectives") or "").strip()
+        approach = str(row.get("approach") or "").strip()
+        results_text = str(row.get("results") or "").strip()
+        research_areas = str(row.get("researchAreas") or "").strip()
+
+        description_parts = [objectives, approach, results_text]
+        description = " ".join(p for p in description_parts if p)
+
+        # Keyword matching uses everything we have, including researchAreas
+        # tagged by NASA themselves (often more useful than the title alone)
+        keyword_text = " ".join(p for p in [title, description, research_areas] if p)
+        keyword_matches = keyword_classify(keyword_text, patterns)
+
+        ai_result: dict[str, Any] | None = None
+        if not keyword_matches and api_key and session is not None:
+            print(
+                f"[classify] Classifying {position}/{total}: {osid} — "
+                f"no keyword match, querying AI..."
+            )
+            try:
+                ai_result = ai_classify(session, api_key, title, description)
+                api_calls += 1
+            except Exception as exc:
+                print(f"[classify]   AI error: {exc}")
+            time.sleep(AI_RATE_LIMIT_SEC)
+        else:
+            if keyword_matches:
+                print(
+                    f"[classify] Classifying {position}/{total}: {osid} — "
+                    f"keyword match: {', '.join(keyword_matches.keys())}"
+                )
+            else:
+                print(
+                    f"[classify] Classifying {position}/{total}: {osid} — "
+                    f"no keyword match, no AI fallback"
+                )
+
+        results[osid] = build_record(osid, keyword_matches, ai_result)
+        new_count += 1
+
+        if new_count % CHECKPOINT_EVERY == 0:
+            save_checkpoint(results, api_calls)
+            print(f"[classify]   checkpoint saved at {len(results)} records")
+
+    save_checkpoint(results, api_calls)
+    write_outputs(df, results)
+    print_summary(results, api_calls)
+
+
+def print_summary(results: dict[str, dict[str, Any]], api_calls: int) -> None:
+    by_source: dict[str, int] = {}
+    by_area: dict[str, int] = {a: 0 for a in DISEASE_AREA_NAMES}
+    health_yes = 0
+    health_no = 0
+    non_health_categories: dict[str, int] = {}
+
+    for r in results.values():
+        by_source[r["classification_source"]] = by_source.get(r["classification_source"], 0) + 1
+        if r.get("health_related"):
+            health_yes += 1
+        else:
+            health_no += 1
+            cat = r.get("non_health_category") or "unknown"
+            non_health_categories[cat] = non_health_categories.get(cat, 0) + 1
+        for area in r.get("disease_areas_list", []):
+            if area in by_area:
+                by_area[area] += 1
+
+    print()
+    print("=" * 60)
+    print(f"[classify] SUMMARY  ({len(results)} experiments)")
+    print("=" * 60)
+    print(f"  Health-related     : {health_yes}")
+    print(f"  Not health-related : {health_no}")
+    print()
+    print("  Classification source:")
+    for src, n in sorted(by_source.items(), key=lambda kv: -kv[1]):
+        print(f"    {src:8s} : {n}")
+    print()
+    print("  Experiments per disease area (multi-tag):")
+    for area in DISEASE_AREA_NAMES:
+        print(f"    {area:42s} : {by_area[area]}")
+    if non_health_categories:
+        print()
+        print("  Non-health categories:")
+        for cat, n in sorted(non_health_categories.items(), key=lambda kv: -kv[1]):
+            print(f"    {cat:32s} : {n}")
+    print()
+    print(f"  Total OpenRouter API calls : {api_calls}")
+    print(f"  CSV   → {CSV_OUTPUT}")
+    print(f"  JSON  → {DETAILS_JSON}")
 
 
 if __name__ == "__main__":
